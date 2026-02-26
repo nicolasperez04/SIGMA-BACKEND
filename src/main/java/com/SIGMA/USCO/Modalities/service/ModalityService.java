@@ -717,7 +717,7 @@ public class ModalityService {
                             .status(ModalityProcessStatus.UNDER_REVIEW_PROGRAM_HEAD)
                             .changeDate(LocalDateTime.now())
                             .responsible(responsibleUser)
-                            .observations("Todos los documentos obligatorios (MANDATORY) han sido subidos. " +
+                            .observations("Todos los documentos obligatorios han sido subidos. " +
                                          "La modalidad pasa automáticamente a revisión del jefe de programa.")
                             .build()
             );
@@ -1986,6 +1986,7 @@ public class ModalityService {
                         studentModality.getId()
                 );
 
+        // Ordenar el historial de más reciente a más antiguo
         List<ModalityStatusHistoryDTO> history = historyEntities.stream()
                 .map(h -> ModalityStatusHistoryDTO.builder()
                         .status(h.getStatus().name())
@@ -1999,6 +2000,7 @@ public class ModalityService {
                         .observations(h.getObservations())
                         .build()
                 )
+                .sorted((h1, h2) -> h2.getChangeDate().compareTo(h1.getChangeDate())) // Más reciente arriba
                 .toList();
 
 
@@ -2679,17 +2681,22 @@ public class ModalityService {
                             .findByUserId(member.getStudent().getId())
                             .orElse(null);
 
+                    // ...existing code...
                     return ModalityMemberDTO.builder()
-                            .memberId(member.getId())
-                            .studentId(member.getStudent().getId())
-                            .studentName(member.getStudent().getName())
-                            .studentLastName(member.getStudent().getLastName())
-                            .studentEmail(member.getStudent().getEmail())
-                            .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
-                            .isLeader(member.getIsLeader())
-                            .status(member.getStatus().name())
-                            .joinedAt(member.getJoinedAt())
-                            .build();
+                        .memberId(member.getId())
+                        .studentId(member.getStudent().getId())
+                        .studentName(member.getStudent().getName())
+                        .studentLastName(member.getStudent().getLastName())
+                        .studentEmail(member.getStudent().getEmail())
+                        .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
+                        .approvedCredits(memberProfile != null ? (memberProfile.getApprovedCredits() != null ? memberProfile.getApprovedCredits().intValue() : null) : null)
+                        .gpa(memberProfile != null ? (memberProfile.getGpa() != null ? memberProfile.getGpa().doubleValue() : null) : null)
+                        .semester(memberProfile != null ? (memberProfile.getSemester() != null ? memberProfile.getSemester().toString() : null) : null)
+                        .isLeader(member.getIsLeader())
+                        .status(member.getStatus().name())
+                        .joinedAt(member.getJoinedAt())
+                        .build();
+                    // ...existing code...
                 })
                 .toList();
 
@@ -3544,6 +3551,8 @@ public class ModalityService {
                         .build()
         );
     }
+
+
 
     public ResponseEntity<?> requestCancellation(Long studentModalityId) {
 
@@ -7878,5 +7887,31 @@ public class ModalityService {
                 .toList();
         return ResponseEntity.ok(calendar);
     }
+
+    @Transactional
+    public ResponseEntity<?> getExaminerTypeForModality(Long studentModalityId) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String email = auth.getName();
+        User examiner = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        DefenseExaminer defenseExaminer = defenseExaminerRepository
+                .findByStudentModalityIdAndExaminerId(studentModalityId, examiner.getId())
+                .orElse(null);
+
+        if (defenseExaminer == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                        "success", false,
+                        "message", "No está asignado como jurado a esta modalidad"
+                    ));
+        }
+
+        return ResponseEntity.ok(Map.of(
+            "success", true,
+            "examinerType", defenseExaminer.getExaminerType().name()
+        ));
+    }
+
 
 }

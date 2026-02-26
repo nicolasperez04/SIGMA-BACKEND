@@ -25,6 +25,8 @@ public class ModalityMemberDTO {
     private Boolean isLeader;
     private String status;
     private LocalDateTime joinedAt;
+    private Integer approvedCredits;
+    private Double gpa;
+    private String semester;
 
 }
-

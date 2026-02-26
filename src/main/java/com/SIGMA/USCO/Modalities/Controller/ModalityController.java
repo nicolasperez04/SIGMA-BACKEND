@@ -1,10 +1,21 @@
 package com.SIGMA.USCO.Modalities.Controller;
 
+import com.SIGMA.USCO.Modalities.Entity.DefenseExaminer;
 import com.SIGMA.USCO.Modalities.Entity.DegreeModality;
+import com.SIGMA.USCO.Modalities.Entity.StudentModality;
+import com.SIGMA.USCO.Modalities.Entity.StudentModalityMember;
+import com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus;
 import com.SIGMA.USCO.Modalities.Entity.enums.ModalityProcessStatus;
 import com.SIGMA.USCO.Modalities.dto.*;
 import com.SIGMA.USCO.Modalities.dto.response.ProjectDirectorResponse;
 import com.SIGMA.USCO.Modalities.service.ModalityService;
+import com.SIGMA.USCO.Users.Entity.User;
+import com.SIGMA.USCO.Users.Entity.enums.ProgramRole;
+import com.SIGMA.USCO.academic.entity.AcademicProgram;
+import com.SIGMA.USCO.academic.entity.StudentProfile;
+import com.SIGMA.USCO.documents.dto.DetailDocumentDTO;
+import com.SIGMA.USCO.documents.entity.DocumentStatus;
+import com.SIGMA.USCO.documents.entity.RequiredDocument;
 import com.SIGMA.USCO.documents.entity.StudentDocument;
 import com.SIGMA.USCO.documents.service.DocumentService;
 import jakarta.validation.Valid;
@@ -16,6 +27,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -23,8 +36,11 @@ import java.io.IOException;
 import java.net.MalformedURLException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/modalities")
@@ -560,6 +576,12 @@ public class ModalityController {
     @PreAuthorize("hasAuthority('PERM_VIEW_EXAMINER_MODALITIES')")
     public ResponseEntity<?> getExaminerDefenseCalendar() {
         return modalityService.getExaminerDefenseCalendar();
+    }
+
+    @GetMapping("/examiner-type/{studentModalityId}")
+    @PreAuthorize( "hasAuthority('PERM_VIEW_EXAMINER_MODALITIES')")
+    public ResponseEntity<?> getExaminerTypeForModality(@PathVariable Long studentModalityId) {
+        return modalityService.getExaminerTypeForModality(studentModalityId);
     }
 
 }
