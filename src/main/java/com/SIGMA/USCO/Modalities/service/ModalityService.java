@@ -1886,11 +1886,11 @@ public class ModalityService {
             case PROPOSAL_APPROVED ->
                     "La modalidad fue aprobada por el comité de currículo de programa y los jurados asignados.";
             case DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR ->
-                    "El director de proyecto ha propuesto fecha y lugar de sustentación. Pendiente de aprobación por el comité de currículo de programa.";
+                    "El director de proyecto ha propuesto fecha y lugar de sustentación. Pendiente de confirmación...";
             case DEFENSE_SCHEDULED ->
-                    "La sustentación ha sido programada por el comité de currículo de programa.";
+                    "La sustentación ha sido programada por el director de proyecto";
             case EXAMINERS_ASSIGNED ->
-                    "Los jueces han sido asignados a tu sustentación. Están revisando tu documentación.";
+                    "Los jueces han sido asignados a la modalidad. Próximo paso: revisión de documentos por parte de los jueces.";
             case READY_FOR_EXAMINERS ->
                     "La modalidad está lista para ser revisada por los jueces asignados. Próximo paso: sustentación y evaluación.";
             case CORRECTIONS_REQUESTED_EXAMINERS ->
@@ -2674,14 +2674,14 @@ public class ModalityService {
             defenseProposedBy = "El director de proyecto ha propuesto una fecha de sustentación";
         }
 
-        // Convertir miembros activos a DTOs
+
         List<ModalityMemberDTO> memberDTOs = activeMembers.stream()
                 .map(member -> {
                     StudentProfile memberProfile = studentProfileRepository
                             .findByUserId(member.getStudent().getId())
                             .orElse(null);
 
-                    // ...existing code...
+
                     return ModalityMemberDTO.builder()
                         .memberId(member.getId())
                         .studentId(member.getStudent().getId())
@@ -2696,7 +2696,7 @@ public class ModalityService {
                         .status(member.getStatus().name())
                         .joinedAt(member.getJoinedAt())
                         .build();
-                    // ...existing code...
+
                 })
                 .toList();
 
@@ -2776,7 +2776,6 @@ public class ModalityService {
     }
 
     public ResponseEntity<?> getStudentModalityDetailForCommittee(Long studentModalityId) {
-
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         String email = auth.getName();
 
@@ -2800,25 +2799,20 @@ public class ModalityService {
                     .body("No tiene permiso para ver esta modalidad");
         }
 
-
-
+        // Obtener todos los miembros activos de la modalidad
         List<StudentModalityMember> activeMembers =
-                studentModalityMemberRepository.findByStudentModalityIdAndStatus(
-                        studentModalityId,
-                        MemberStatus.ACTIVE
-                );
+            studentModalityMemberRepository.findByStudentModalityIdAndStatus(
+                studentModalityId,
+                MemberStatus.ACTIVE
+            );
 
-
+        // Usar el líder como estudiante principal
         User student = studentModality.getLeader();
         DegreeModality modality =
                 studentModality.getProgramDegreeModality().getDegreeModality();
 
-
-
-
         StudentProfile studentProfile = studentProfileRepository.findByUserId(student.getId())
                 .orElse(null);
-
 
         List<ModalityStatusHistoryDTO> history =
                 historyRepository
@@ -2839,7 +2833,6 @@ public class ModalityService {
                         .sorted((h1, h2) -> h2.getChangeDate().compareTo(h1.getChangeDate())) // Ordenar de más reciente a más antiguo
                         .toList();
 
-
         List<RequiredDocument> requiredDocuments =
                 requiredDocumentRepository
                         .findByModalityIdAndActiveTrue(modality.getId());
@@ -2859,7 +2852,6 @@ public class ModalityService {
                 requiredDocuments.stream()
                         .map(req -> {
                             StudentDocument uploaded = uploadedMap.get(req.getId());
-
                             return DetailDocumentDTO.builder()
                                     .studentDocumentId(
                                             uploaded != null ? uploaded.getId() : null
@@ -2887,7 +2879,6 @@ public class ModalityService {
                         })
                         .toList();
 
-
         long approvedDocs = uploadedDocuments.stream()
                 .filter(d -> d.getStatus() == DocumentStatus.ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW)
                 .count();
@@ -2901,7 +2892,6 @@ public class ModalityService {
                             d.getStatus() == DocumentStatus.REJECTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW)
                 .count();
 
-
         Long daysRemaining = null;
         if (studentModality.getCorrectionDeadline() != null) {
             daysRemaining = ChronoUnit.DAYS.between(
@@ -2909,7 +2899,6 @@ public class ModalityService {
                     studentModality.getCorrectionDeadline()
             );
         }
-
 
         ModalityProcessStatus status = studentModality.getStatus();
         boolean canUploadDocuments = status == ModalityProcessStatus.MODALITY_SELECTED ||
@@ -2933,14 +2922,13 @@ public class ModalityService {
                                 status == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD ||
                                 status == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE;
 
-
         User projectDirector = studentModality.getProjectDirector();
         String defenseProposedBy = null;
         if (status == ModalityProcessStatus.DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR) {
             defenseProposedBy = "El director de proyecto ha propuesto una fecha de sustentación";
         }
 
-
+        // Convertir miembros activos a DTOs (incluyendo créditos, promedio y semestre)
         List<ModalityMemberDTO> memberDTOs = activeMembers.stream()
                 .map(member -> {
                     StudentProfile memberProfile = studentProfileRepository
@@ -2948,22 +2936,24 @@ public class ModalityService {
                             .orElse(null);
 
                     return ModalityMemberDTO.builder()
-                            .memberId(member.getId())
-                            .studentId(member.getStudent().getId())
-                            .studentName(member.getStudent().getName())
-                            .studentLastName(member.getStudent().getLastName())
-                            .studentEmail(member.getStudent().getEmail())
-                            .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
-                            .isLeader(member.getIsLeader())
-                            .status(member.getStatus().name())
-                            .joinedAt(member.getJoinedAt())
-                            .build();
+                        .memberId(member.getId())
+                        .studentId(member.getStudent().getId())
+                        .studentName(member.getStudent().getName())
+                        .studentLastName(member.getStudent().getLastName())
+                        .studentEmail(member.getStudent().getEmail())
+                        .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
+                        .approvedCredits(memberProfile != null ? (memberProfile.getApprovedCredits() != null ? memberProfile.getApprovedCredits().intValue() : null) : null)
+                        .gpa(memberProfile != null ? (memberProfile.getGpa() != null ? memberProfile.getGpa().doubleValue() : null) : null)
+                        .semester(memberProfile != null ? (memberProfile.getSemester() != null ? memberProfile.getSemester().toString() : null) : null)
+                        .isLeader(member.getIsLeader())
+                        .status(member.getStatus().name())
+                        .joinedAt(member.getJoinedAt())
+                        .build();
                 })
                 .toList();
 
         return ResponseEntity.ok(
                 StudentModalityDTO.builder()
-
                         .studentId(student.getId())
                         .studentName(student.getName())
                         .studentLastName(student.getLastName())
@@ -2972,12 +2962,8 @@ public class ModalityService {
                         .approvedCredits(studentProfile != null ? studentProfile.getApprovedCredits() : null)
                         .gpa(studentProfile != null ? studentProfile.getGpa() : null)
                         .semester(studentProfile != null ? studentProfile.getSemester() : null)
-
-
                         .facultyName(academicProgram.getFaculty().getName())
                         .academicProgramName(academicProgram.getName())
-
-
                         .studentModalityId(studentModality.getId())
                         .modalityName(modality.getName())
                         .modalityDescription(modality.getDescription())
@@ -2986,47 +2972,31 @@ public class ModalityService {
                                 ? studentModality.getModalityType().name()
                                 : null)
                         .members(memberDTOs)
-
-
                         .currentStatus(status.name())
                         .currentStatusDescription(describeModalityStatus(status))
                         .selectionDate(studentModality.getSelectionDate())
                         .lastUpdatedAt(studentModality.getUpdatedAt())
-
-
                         .projectDirectorId(projectDirector != null ? projectDirector.getId() : null)
                         .projectDirectorName(projectDirector != null
                                 ? projectDirector.getName() + " " + projectDirector.getLastName()
                                 : null)
                         .projectDirectorEmail(projectDirector != null ? projectDirector.getEmail() : null)
-
-
                         .defenseDate(studentModality.getDefenseDate())
                         .defenseLocation(studentModality.getDefenseLocation())
                         .defenseProposedByProjectDirector(defenseProposedBy)
-
-
                         .academicDistinction(studentModality.getAcademicDistinction() != null
                                 ? studentModality.getAcademicDistinction().name()
                                 : null)
-
-
                         .correctionRequestDate(studentModality.getCorrectionRequestDate())
                         .correctionDeadline(studentModality.getCorrectionDeadline())
                         .correctionReminderSent(studentModality.getCorrectionReminderSent())
                         .daysRemainingForCorrection(daysRemaining)
-
-
                         .documents(documents)
                         .totalDocuments(uploadedDocuments.size())
                         .approvedDocuments((int) approvedDocs)
                         .pendingDocuments((int) pendingDocs)
                         .rejectedDocuments((int) rejectedDocs)
-
-
                         .history(history)
-
-
                         .canUploadDocuments(canUploadDocuments)
                         .canRequestCancellation(canRequestCancellation)
                         .canSubmitCorrections(canSubmitCorrections)
@@ -3192,24 +3162,26 @@ public class ModalityService {
 
         // Convertir miembros activos a DTOs
         List<ModalityMemberDTO> memberDTOs = activeMembers.stream()
-                .map(member -> {
-                    StudentProfile memberProfile = studentProfileRepository
-                            .findByUserId(member.getStudent().getId())
-                            .orElse(null);
-
-                    return ModalityMemberDTO.builder()
-                            .memberId(member.getId())
-                            .studentId(member.getStudent().getId())
-                            .studentName(member.getStudent().getName())
-                            .studentLastName(member.getStudent().getLastName())
-                            .studentEmail(member.getStudent().getEmail())
-                            .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
-                            .isLeader(member.getIsLeader())
-                            .status(member.getStatus().name())
-                            .joinedAt(member.getJoinedAt())
-                            .build();
-                })
-                .toList();
+            .map(member -> {
+                StudentProfile memberProfile = studentProfileRepository
+                    .findByUserId(member.getStudent().getId())
+                    .orElse(null);
+                return ModalityMemberDTO.builder()
+                    .memberId(member.getId())
+                    .studentId(member.getStudent().getId())
+                    .studentName(member.getStudent().getName())
+                    .studentLastName(member.getStudent().getLastName())
+                    .studentEmail(member.getStudent().getEmail())
+                    .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
+                    .approvedCredits(memberProfile != null ? (memberProfile.getApprovedCredits() != null ? memberProfile.getApprovedCredits().intValue() : null) : null)
+                    .gpa(memberProfile != null ? (memberProfile.getGpa() != null ? memberProfile.getGpa().doubleValue() : null) : null)
+                    .semester(memberProfile != null ? (memberProfile.getSemester() != null ? memberProfile.getSemester().toString() : null) : null)
+                    .isLeader(member.getIsLeader())
+                    .status(member.getStatus().name())
+                    .joinedAt(member.getJoinedAt())
+                    .build();
+            })
+            .toList();
 
         return ResponseEntity.ok(
                 StudentModalityDTO.builder()
@@ -3458,26 +3430,28 @@ public class ModalityService {
         // Director del proyecto
         User projectDirector = studentModality.getProjectDirector();
 
-        // Convertir miembros activos a DTOs
+        // Convertir miembros activos a DTOs (incluyendo créditos, promedio y semestre)
         List<ModalityMemberDTO> memberDTOs = activeMembers.stream()
-                .map(member -> {
-                    StudentProfile memberProfile = studentProfileRepository
-                            .findByUserId(member.getStudent().getId())
-                            .orElse(null);
-
-                    return ModalityMemberDTO.builder()
-                            .memberId(member.getId())
-                            .studentId(member.getStudent().getId())
-                            .studentName(member.getStudent().getName())
-                            .studentLastName(member.getStudent().getLastName())
-                            .studentEmail(member.getStudent().getEmail())
-                            .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
-                            .isLeader(member.getIsLeader())
-                            .status(member.getStatus().name())
-                            .joinedAt(member.getJoinedAt())
-                            .build();
-                })
-                .toList();
+            .map(member -> {
+                StudentProfile memberProfile = studentProfileRepository
+                    .findByUserId(member.getStudent().getId())
+                    .orElse(null);
+                return ModalityMemberDTO.builder()
+                    .memberId(member.getId())
+                    .studentId(member.getStudent().getId())
+                    .studentName(member.getStudent().getName())
+                    .studentLastName(member.getStudent().getLastName())
+                    .studentEmail(member.getStudent().getEmail())
+                    .studentCode(memberProfile != null ? memberProfile.getStudentCode() : null)
+                    .approvedCredits(memberProfile != null ? (memberProfile.getApprovedCredits() != null ? memberProfile.getApprovedCredits().intValue() : null) : null)
+                    .gpa(memberProfile != null ? (memberProfile.getGpa() != null ? memberProfile.getGpa().doubleValue() : null) : null)
+                    .semester(memberProfile != null ? (memberProfile.getSemester() != null ? memberProfile.getSemester().toString() : null) : null)
+                    .isLeader(member.getIsLeader())
+                    .status(member.getStatus().name())
+                    .joinedAt(member.getJoinedAt())
+                    .build();
+            })
+            .toList();
 
         return ResponseEntity.ok(
                 StudentModalityExaminerDTO.builder()
@@ -4737,15 +4711,16 @@ public class ModalityService {
         }
 
 
-        if (studentModality.getStatus() != ModalityProcessStatus.READY_FOR_EXAMINERS) {
-            return ResponseEntity.badRequest().body(
-                    Map.of(
-                            "success", false,
-                            "message", "La modalidad debe estar en estado 'Listo para jueces' para asignar jueces",
-                            "currentStatus", studentModality.getStatus()
-                    )
-            );
-        }
+//        if (studentModality.getStatus() != ModalityProcessStatus.READY_FOR_EXAMINERS ||
+//        studentModality.getStatus() != ModalityProcessStatus.READY_FOR_PROGRAM_CURRICULUM_COMMITTEE) {
+//            return ResponseEntity.badRequest().body(
+//                    Map.of(
+//                            "success", false,
+//                            "message", "La modalidad debe estar en estado 'Listo para jueces' para asignar jueces",
+//                            "currentStatus", studentModality.getStatus()
+//                    )
+//            );
+//        }
 
 
         if (request.getPrimaryExaminer1Id() == null &&
@@ -7913,5 +7888,47 @@ public class ModalityService {
         ));
     }
 
+    @Transactional
+    public ResponseEntity<?> getExaminerEvaluationForModality(Long studentModalityId) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String email = auth.getName();
+        User examiner = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        DefenseExaminer defenseExaminer = defenseExaminerRepository
+                .findByStudentModalityIdAndExaminerId(studentModalityId, examiner.getId())
+                .orElse(null);
+
+        if (defenseExaminer == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of(
+                        "success", false,
+                        "message", "No está asignado como jurado a esta modalidad"
+                    ));
+        }
+
+        ExaminerEvaluation evaluation = examinerEvaluationRepository
+                .findByDefenseExaminerId(defenseExaminer.getId())
+                .orElse(null);
+
+        if (evaluation == null) {
+            return ResponseEntity.ok(Map.of(
+                "success", false,
+                "message", "No ha registrado evaluación para esta modalidad"
+            ));
+        }
+
+        ExaminerEvaluationDTO dto = ExaminerEvaluationDTO.builder()
+                .grade(evaluation.getGrade())
+                .decision(evaluation.getDecision())
+                .observations(evaluation.getObservations())
+                .evaluationDate(evaluation.getEvaluationDate())
+                .build();
+
+        return ResponseEntity.ok(Map.of(
+            "success", true,
+            "evaluation", dto
+        ));
+    }
 
 }

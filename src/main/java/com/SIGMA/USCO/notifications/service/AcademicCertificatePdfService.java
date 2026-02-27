@@ -2,6 +2,7 @@ package com.SIGMA.USCO.notifications.service;
 
 import com.SIGMA.USCO.Modalities.Entity.AcademicCertificate;
 import com.SIGMA.USCO.Modalities.Entity.StudentModality;
+import com.SIGMA.USCO.Modalities.Entity.StudentModalityMember;
 import com.SIGMA.USCO.Modalities.Entity.enums.AcademicDistinction;
 import com.SIGMA.USCO.Modalities.Entity.enums.CertificateStatus;
 import com.SIGMA.USCO.Modalities.Repository.AcademicCertificateRepository;
@@ -27,6 +28,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -153,30 +155,59 @@ public class AcademicCertificatePdfService {
             resultText.setSpacingAfter(18);
             document.add(resultText);
 
-            // 4. Datos del estudiante (en tabla con fondo dorado claro)
-            Paragraph studentSection = new Paragraph("DATOS DEL ESTUDIANTE", HEADER_FONT);
+            // 4. Datos de los estudiantes (en tabla con fondo dorado claro)
+            Paragraph studentSection = new Paragraph("Datos de los Estudiantes", HEADER_FONT);
             studentSection.setSpacingAfter(8);
             document.add(studentSection);
 
-            String studentCode = "No registrado";
-            try {
-                StudentProfile profile = studentProfileRepository.findByUserId(student.getId()).orElse(null);
-                if (profile != null && profile.getStudentCode() != null) {
-                    studentCode = profile.getStudentCode();
-                }
-            } catch (Exception e) {
-                log.warn("No se pudo obtener el código del estudiante: {}", e.getMessage());
-            }
-
+            List<StudentModalityMember> modalityMembers = studentModality.getMembers() != null ? studentModality.getMembers() : List.of();
             PdfPTable studentTable = new PdfPTable(2);
             studentTable.setWidthPercentage(100);
             studentTable.setSpacingBefore(5);
             studentTable.setSpacingAfter(15);
-            addStyledTableRow(studentTable, "Nombre completo:", student.getName() + " " + student.getLastName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
-            addStyledTableRow(studentTable, "Código estudiantil:", studentCode, LABEL_FONT, DATA_FONT, LIGHT_GOLD);
-            addStyledTableRow(studentTable, "Correo institucional:", student.getEmail(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
-            addStyledTableRow(studentTable, "Programa académico:", studentModality.getProgramDegreeModality().getAcademicProgram().getName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
-            addStyledTableRow(studentTable, "Facultad:", studentModality.getProgramDegreeModality().getAcademicProgram().getFaculty().getName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+
+            if (!modalityMembers.isEmpty()) {
+                for (StudentModalityMember member : modalityMembers) {
+                    User memberUser = member.getStudent();
+                    String memberCode = "No registrado";
+                    try {
+                        StudentProfile profile = studentProfileRepository.findByUserId(memberUser.getId()).orElse(null);
+                        if (profile != null && profile.getStudentCode() != null) {
+                            memberCode = profile.getStudentCode();
+                        }
+                    } catch (Exception e) {
+                        log.warn("No se pudo obtener el código del estudiante: {}", e.getMessage());
+                    }
+                    addStyledTableRow(studentTable, "Nombre completo:", memberUser.getName() + " " + memberUser.getLastName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                    addStyledTableRow(studentTable, "Código estudiantil:", memberCode, LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                    addStyledTableRow(studentTable, "Correo institucional:", memberUser.getEmail(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                    addStyledTableRow(studentTable, "Programa académico:", studentModality.getProgramDegreeModality().getAcademicProgram().getName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                    addStyledTableRow(studentTable, "Facultad:", studentModality.getProgramDegreeModality().getAcademicProgram().getFaculty().getName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                    // Separador visual entre estudiantes
+                    PdfPCell separator = new PdfPCell(new Phrase("", DATA_FONT));
+                    separator.setColspan(2);
+                    separator.setBorder(PdfPCell.NO_BORDER);
+                    separator.setMinimumHeight(8f);
+                    studentTable.addCell(separator);
+                }
+            } else {
+                // Si no hay miembros, mostrar solo el líder
+                User leaderStudent = studentModality.getLeader();
+                String leaderCode = "No registrado";
+                try {
+                    StudentProfile profile = studentProfileRepository.findByUserId(leaderStudent.getId()).orElse(null);
+                    if (profile != null && profile.getStudentCode() != null) {
+                        leaderCode = profile.getStudentCode();
+                    }
+                } catch (Exception e) {
+                    log.warn("No se pudo obtener el código del estudiante: {}", e.getMessage());
+                }
+                addStyledTableRow(studentTable, "Nombre completo:", leaderStudent.getName() + " " + leaderStudent.getLastName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                addStyledTableRow(studentTable, "Código estudiantil:", leaderCode, LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                addStyledTableRow(studentTable, "Correo institucional:", leaderStudent.getEmail(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                addStyledTableRow(studentTable, "Programa académico:", studentModality.getProgramDegreeModality().getAcademicProgram().getName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+                addStyledTableRow(studentTable, "Facultad:", studentModality.getProgramDegreeModality().getAcademicProgram().getFaculty().getName(), LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+            }
             document.add(studentTable);
 
             // 5. Información de la modalidad
@@ -195,7 +226,7 @@ public class AcademicCertificatePdfService {
                             .map(m -> m.getStudent().getName() + " " + m.getStudent().getLastName() + " (" + m.getStudent().getEmail() + ")")
                             .collect(java.util.stream.Collectors.joining(", ")) :
                     student.getName() + " " + student.getLastName() + " (" + student.getEmail() + ")";
-            addStyledTableRow(modalityTable, "Integrantes:", members, LABEL_FONT, DATA_FONT, LIGHT_GOLD);
+
             // Jurados
             String examiners = "No asignados";
             try {
@@ -301,14 +332,21 @@ public class AcademicCertificatePdfService {
             // Jurado de desempate (solo si aplica)
             boolean showTieBreaker = false;
             com.SIGMA.USCO.Modalities.Entity.enums.ModalityProcessStatus status = studentModality.getStatus();
-            if (juradoCount >= 3 && status != null) {
-                showTieBreaker = switch (status) {
-                    case DISAGREEMENT_REQUIRES_TIEBREAKER, UNDER_EVALUATION_TIEBREAKER, EVALUATION_COMPLETED -> true;
-                    default -> false;
-                };
+            AcademicDistinction tieBreakerDistinction = studentModality.getAcademicDistinction();
+            // Mostrar la firma del jurado de desempate si hay 3 jurados y la distinción es de desempate
+            if (juradoCount >= 3 && status != null && defenseExaminers.size() >= 3) {
+                showTieBreaker = (
+                    tieBreakerDistinction == AcademicDistinction.TIEBREAKER_APPROVED ||
+                    tieBreakerDistinction == AcademicDistinction.TIEBREAKER_MERITORIOUS ||
+                    tieBreakerDistinction == AcademicDistinction.TIEBREAKER_LAUREATE ||
+                    tieBreakerDistinction == AcademicDistinction.TIEBREAKER_REJECTED
+                );
             }
             if (showTieBreaker) {
-                com.SIGMA.USCO.Modalities.Entity.DefenseExaminer tieBreakerExaminer = defenseExaminers.get(2);
+                com.SIGMA.USCO.Modalities.Entity.DefenseExaminer tieBreakerExaminer = defenseExaminers.stream()
+                    .filter(e -> e.getExaminerType() != null && e.getExaminerType().name().equals("TIEBREAKER_EXAMINER"))
+                    .findFirst()
+                    .orElse(defenseExaminers.get(2)); // fallback por posición
                 User tieBreaker = tieBreakerExaminer.getExaminer();
                 PdfPCell tieBreakerCell = new PdfPCell();
                 tieBreakerCell.setBorder(Rectangle.NO_BORDER);
@@ -543,6 +581,18 @@ public class AcademicCertificatePdfService {
         certificateRepository.save(certificate);
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

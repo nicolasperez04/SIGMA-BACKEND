@@ -2,8 +2,10 @@ package com.SIGMA.USCO.notifications.listeners;
 
 import com.SIGMA.USCO.Modalities.Entity.AcademicCertificate;
 import com.SIGMA.USCO.Modalities.Entity.StudentModality;
+import com.SIGMA.USCO.Modalities.Entity.StudentModalityMember;
 import com.SIGMA.USCO.Modalities.Entity.enums.AcademicDistinction;
 import com.SIGMA.USCO.Modalities.Entity.enums.CertificateStatus;
+import com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus;
 import com.SIGMA.USCO.Modalities.Entity.enums.ModalityProcessStatus;
 import com.SIGMA.USCO.Modalities.Repository.StudentModalityMemberRepository;
 import com.SIGMA.USCO.Modalities.Repository.StudentModalityRepository;
@@ -26,6 +28,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor
@@ -497,65 +500,68 @@ public class StudentNotificationListener {
         StudentModality modality = studentModalityRepository.findById(event.getStudentModalityId())
                         .orElseThrow();
 
-        User student = modality.getLeader();
-
         boolean approved = event.getFinalStatus() == ModalityProcessStatus.GRADED_APPROVED;
 
         String studentSubject = approved
                 ? "Resultado final de sustentación – Modalidad aprobada"
                 : "Resultado final de sustentación – Modalidad no aprobada";
 
-        String studentMessage = approved
-                ? buildApprovedStudentMessage(student, modality, event)
-                : buildRejectedStudentMessage(student, modality, event);
+        // Obtener todos los miembros activos
+        List<StudentModalityMember> members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
+            modality.getId(), MemberStatus.ACTIVE
+        );
+
+        for (StudentModalityMember member : members) {
+            User student = member.getStudent();
+            String studentMessage = approved
+                    ? buildApprovedStudentMessage(student, modality, event)
+                    : buildRejectedStudentMessage(student, modality, event);
+
+            Notification notification = Notification.builder()
+                    .type(NotificationType.DEFENSE_COMPLETED)
+                    .recipientType(NotificationRecipientType.STUDENT)
+                    .recipient(student)
+                    .triggeredBy(null)
+                    .studentModality(modality)
+                    .subject(studentSubject)
+                    .message(studentMessage)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            notificationRepository.save(notification);
+
+            if (approved) {
+                try {
+                    log.info("Generando acta de aprobación para la modalidad ID: {}", modality.getId());
 
 
-
-        Notification notification = Notification.builder()
-                .type(NotificationType.DEFENSE_COMPLETED)
-                .recipientType(NotificationRecipientType.STUDENT)
-                .recipient(student)
-                .triggeredBy(null)
-                .studentModality(modality)
-                .subject(studentSubject)
-                .message(studentMessage)
-                .createdAt(LocalDateTime.now())
-                .build();
-        notificationRepository.save(notification);
+                    AcademicCertificate certificate = certificatePdfService.generateCertificate(modality);
 
 
-        if (approved) {
-            try {
-                log.info("Generando acta de aprobación para la modalidad ID: {}", modality.getId());
+                    Path pdfPath = certificatePdfService.getCertificatePath(modality.getId());
 
 
-                AcademicCertificate certificate = certificatePdfService.generateCertificate(modality);
+                    dispatcher.dispatchWithAttachment(
+                            notification,
+                            pdfPath,
+                            "ACTA_DE_APROBACION.pdf"
+                    );
 
 
-                Path pdfPath = certificatePdfService.getCertificatePath(modality.getId());
+                    certificatePdfService.updateCertificateStatus(certificate.getId(), CertificateStatus.SENT);
+
+                    log.info("Acta PDF generada y enviada exitosamente para la modalidad ID: {}", modality.getId());
+
+                } catch (IOException e) {
+                    log.error("Error generando o enviando acta PDF para modalidad ID {}: {}",
+                            modality.getId(), e.getMessage(), e);
 
 
-                dispatcher.dispatchWithAttachment(
-                        notification,
-                        pdfPath,
-                        "ACTA_DE_APROBACION" + ".pdf"
-                );
-
-
-                certificatePdfService.updateCertificateStatus(certificate.getId(), CertificateStatus.SENT);
-
-                log.info("Acta PDF generada y enviada exitosamente para la modalidad ID: {}", modality.getId());
-
-            } catch (IOException e) {
-                log.error("Error generando o enviando acta PDF para modalidad ID {}: {}",
-                        modality.getId(), e.getMessage(), e);
-
+                    dispatcher.dispatch(notification);
+                }
+            } else {
 
                 dispatcher.dispatch(notification);
             }
-        } else {
-
-            dispatcher.dispatch(notification);
         }
     }
 

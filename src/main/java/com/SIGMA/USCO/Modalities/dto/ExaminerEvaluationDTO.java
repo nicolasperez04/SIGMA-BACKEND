@@ -29,5 +29,6 @@ public class ExaminerEvaluationDTO {
     @NotBlank(message = "Las observaciones son obligatorias")
     @Size(min = 10, max = 2000, message = "Las observaciones deben tener entre 10 y 2000 caracteres")
     private String observations;
-}
 
+    private java.time.LocalDateTime evaluationDate;
+}

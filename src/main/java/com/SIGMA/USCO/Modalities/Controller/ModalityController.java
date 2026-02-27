@@ -563,7 +563,7 @@ public class ModalityController {
 
 
     @GetMapping("/{studentModalityId}/examiner-evaluation")
-    @PreAuthorize("hasAuthority('PERM_VIEW_EXAMINER_EVALUATION')")
+    @PreAuthorize("hasAuthority('PERM_VIEW_EXAMINER_MODALITIES')")
     public ResponseEntity<?> getFinalDefenseEvaluationForExaminer(@PathVariable Long studentModalityId) {
         return modalityService.getFinalDefenseEvaluationForExaminer(studentModalityId);
     }
@@ -582,6 +582,12 @@ public class ModalityController {
     @PreAuthorize( "hasAuthority('PERM_VIEW_EXAMINER_MODALITIES')")
     public ResponseEntity<?> getExaminerTypeForModality(@PathVariable Long studentModalityId) {
         return modalityService.getExaminerTypeForModality(studentModalityId);
+    }
+
+    @GetMapping("/examiner-evaluation/{studentModalityId}")
+    @PreAuthorize("hasAuthority('PERM_VIEW_EXAMINER_MODALITIES')")
+    public ResponseEntity<?> getExaminerEvaluationForModality(@PathVariable Long studentModalityId) {
+        return modalityService.getExaminerEvaluationForModality(studentModalityId);
     }
 
 }

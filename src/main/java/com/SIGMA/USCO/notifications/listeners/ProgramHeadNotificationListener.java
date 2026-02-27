@@ -458,14 +458,14 @@ public class ProgramHeadNotificationListener {
         if (status == null) return "N/A";
         return switch (status) {
             case PENDING -> "Pendiente";
-            case ACCEPTED_FOR_PROGRAM_HEAD_REVIEW -> "Aceptado para revisión de Jefatura";
-            case REJECTED_FOR_PROGRAM_HEAD_REVIEW -> "Rechazado por Jefatura";
-            case CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD -> "Correcciones solicitadas por Jefatura";
+            case ACCEPTED_FOR_PROGRAM_HEAD_REVIEW -> "Aceptado por Jefatura de Programa";
+            case REJECTED_FOR_PROGRAM_HEAD_REVIEW -> "Rechazado por Jefatura de Programa";
+            case CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD -> "Correcciones solicitadas por Jefatura de Programa";
             case CORRECTION_RESUBMITTED -> "Corrección reenviada";
-            case ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW -> "Aceptado para revisión de Comité de Currículo";
+            case ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW -> "Aceptado por Comité de Currículo";
             case REJECTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW -> "Rechazado por Comité de Currículo";
             case CORRECTIONS_REQUESTED_BY_PROGRAM_CURRICULUM_COMMITTEE -> "Correcciones solicitadas por Comité de Currículo";
-            case ACCEPTED_FOR_EXAMINER_REVIEW -> "Aceptado para revisión de Jurado";
+            case ACCEPTED_FOR_EXAMINER_REVIEW -> "Aceptado por revisión de Jurado";
             case REJECTED_FOR_EXAMINER_REVIEW -> "Rechazado por Jurado";
             case CORRECTIONS_REQUESTED_BY_EXAMINER -> "Correcciones solicitadas por Jurado";
         };
