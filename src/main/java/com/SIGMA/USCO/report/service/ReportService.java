@@ -1306,7 +1306,10 @@ public class ReportService {
         }
 
         // Estados que requieren acción del director
-        if (modality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED) {
+        if (modality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED ||
+            modality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD ||
+            modality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE ||
+            modality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS) {
             observations.add("✅ Correcciones entregadas - Revisar");
         } else if (modality.getStatus() == ModalityProcessStatus.PROPOSAL_APPROVED) {
             observations.add("📝 Propuesta aprobada - En desarrollo");
@@ -2949,8 +2952,12 @@ public class ReportService {
         progressMap.put(ModalityProcessStatus.UNDER_REVIEW_PROGRAM_HEAD, 20);
         progressMap.put(ModalityProcessStatus.READY_FOR_PROGRAM_CURRICULUM_COMMITTEE, 30);
         progressMap.put(ModalityProcessStatus.UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE, 40);
+        progressMap.put(ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT, 45);
         progressMap.put(ModalityProcessStatus.PROPOSAL_APPROVED, 50);
         progressMap.put(ModalityProcessStatus.CORRECTIONS_SUBMITTED, 55);
+        progressMap.put(ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD, 55);
+        progressMap.put(ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE, 55);
+        progressMap.put(ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS, 55);
         progressMap.put(ModalityProcessStatus.CORRECTIONS_APPROVED, 60);
         progressMap.put(ModalityProcessStatus.DEFENSE_SCHEDULED, 70);
         progressMap.put(ModalityProcessStatus.EXAMINERS_ASSIGNED, 75);

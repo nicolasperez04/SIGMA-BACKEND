@@ -55,7 +55,7 @@ public class ExaminerNotificationListener {
 
         for (DefenseExaminer examinerAssignment : examiners) {
             User examiner = examinerAssignment.getExaminer();
-            String subject = "Asignación como Juez en Modalidad de Grado";
+            String subject = "Asignación como Jurado en Modalidad de Grado";
             String message = String.format("""
                 Estimado/a %s %s,
 

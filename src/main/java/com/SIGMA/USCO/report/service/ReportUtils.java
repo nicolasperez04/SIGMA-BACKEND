@@ -15,9 +15,13 @@ public class ReportUtils {
             ModalityProcessStatus.UNDER_REVIEW_PROGRAM_HEAD,
             ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD,
             ModalityProcessStatus.CORRECTIONS_SUBMITTED,
+            ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD,
+            ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE,
+            ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS,
             ModalityProcessStatus.READY_FOR_PROGRAM_CURRICULUM_COMMITTEE,
             ModalityProcessStatus.UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE,
             ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE,
+            ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT,
             ModalityProcessStatus.PROPOSAL_APPROVED,
             ModalityProcessStatus.DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR,
             ModalityProcessStatus.DEFENSE_SCHEDULED,
@@ -41,6 +45,9 @@ public class ReportUtils {
             case UNDER_REVIEW_PROGRAM_HEAD -> "En Revisión - Jefe de Programa";
             case CORRECTIONS_REQUESTED_PROGRAM_HEAD -> "Correcciones Solicitadas - Jefe";
             case CORRECTIONS_SUBMITTED -> "Correcciones Entregadas";
+            case CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD -> "Correcciones Entregadas - Jefatura de Programa y/o coordinación de modalidad";
+            case CORRECTIONS_SUBMITTED_TO_COMMITTEE -> "Correcciones Entregadas - Comité";
+            case CORRECTIONS_SUBMITTED_TO_EXAMINERS -> "Correcciones Entregadas - Jurados";
             case CORRECTIONS_APPROVED -> "Correcciones Aprobadas";
             case CORRECTIONS_REJECTED_FINAL -> "Correcciones Rechazadas (Final)";
 
@@ -48,6 +55,7 @@ public class ReportUtils {
             case READY_FOR_PROGRAM_CURRICULUM_COMMITTEE -> "Listo para Comité";
             case UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE -> "En Revisión - Comité";
             case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE -> "Correcciones Solicitadas - Comité";
+            case READY_FOR_DIRECTOR_ASSIGNMENT -> "Listo para Asignar Director";
             case PROPOSAL_APPROVED -> "Propuesta Aprobada";
 
             // Estados de programación de sustentación

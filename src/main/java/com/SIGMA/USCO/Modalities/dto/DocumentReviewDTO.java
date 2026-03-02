@@ -1,5 +1,6 @@
 package com.SIGMA.USCO.Modalities.dto;
 
+import com.SIGMA.USCO.documents.dto.ProposalEvaluationRequest;
 import com.SIGMA.USCO.documents.entity.DocumentStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -14,5 +15,12 @@ public class DocumentReviewDTO {
 
     private DocumentStatus status;
     private String notes;
+
+    /**
+     * Opcional: calificación por aspectos de la propuesta de grado.
+     * Solo aplica cuando el documento es de tipo MANDATORY.
+     * Si se envía, se almacenará como ProposalEvaluation asociada al documento.
+     */
+    private ProposalEvaluationRequest proposalEvaluation;
 
 }

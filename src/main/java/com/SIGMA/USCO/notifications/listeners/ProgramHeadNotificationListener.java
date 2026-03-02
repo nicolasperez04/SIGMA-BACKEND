@@ -24,6 +24,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
 
 @RequiredArgsConstructor
@@ -451,7 +452,7 @@ public class ProgramHeadNotificationListener {
         }
         return modality.getMembers().stream()
             .map(m -> m.getStudent().getName() + " " + m.getStudent().getLastName() + " (" + m.getStudent().getEmail() + ")")
-            .collect(java.util.stream.Collectors.joining(", "));
+            .collect(Collectors.joining(", "));
     }
 
     private String translateDocumentStatus(DocumentStatus status) {
@@ -477,23 +478,31 @@ public class ProgramHeadNotificationListener {
             case UNDER_REVIEW_PROGRAM_HEAD -> "En revisión por Jefatura";
             case CORRECTIONS_REQUESTED_PROGRAM_HEAD -> "Correcciones solicitadas por Jefatura";
             case CORRECTIONS_SUBMITTED -> "Correcciones enviadas";
+            case CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD -> "Correcciones enviadas a Jefatura de Programa y/o coordinador de modalidades";
+            case CORRECTIONS_SUBMITTED_TO_COMMITTEE -> "Correcciones enviadas al Comité de Currículo";
+            case CORRECTIONS_SUBMITTED_TO_EXAMINERS -> "Correcciones enviadas a los Jurados";
             case CORRECTIONS_APPROVED -> "Correcciones aprobadas";
             case CORRECTIONS_REJECTED_FINAL -> "Correcciones rechazadas (final)";
             case READY_FOR_PROGRAM_CURRICULUM_COMMITTEE -> "Lista para Comité de Currículo";
             case UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE -> "En revisión por Comité de Currículo";
             case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE -> "Correcciones solicitadas por Comité de Currículo";
+            case READY_FOR_DIRECTOR_ASSIGNMENT -> "Lista para asignación de Director de Proyecto";
+            case READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE -> "Lista para aprobación por Comité de Currículo";
             case PROPOSAL_APPROVED -> "Propuesta aprobada";
             case DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR -> "Sustentación solicitada por Director";
             case DEFENSE_SCHEDULED -> "Sustentación programada";
-            case EXAMINERS_ASSIGNED -> "Jueces asignados";
-            case READY_FOR_EXAMINERS -> "Lista para jueces";
-            case CORRECTIONS_REQUESTED_EXAMINERS -> "Correcciones solicitadas por jueces";
+            case EXAMINERS_ASSIGNED -> "Jurados asignados";
+            case READY_FOR_EXAMINERS -> "Lista para jurados";
+            case DOCUMENTS_APPROVED_BY_EXAMINERS -> "Documentos de propuesta aprobados por los jurados";
+            case SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS -> "Documentos finales aprobados por los jurados";
+            case DOCUMENT_REVIEW_TIEBREAKER_REQUIRED -> "Revisión de documentos con desempate requerida";
+            case CORRECTIONS_REQUESTED_EXAMINERS -> "Correcciones solicitadas por jurados";
             case READY_FOR_DEFENSE -> "Lista para sustentación";
             case FINAL_REVIEW_COMPLETED -> "Revisión final completada";
             case DEFENSE_COMPLETED -> "Sustentación realizada";
-            case UNDER_EVALUATION_PRIMARY_EXAMINERS -> "En evaluación por jueces principales";
+            case UNDER_EVALUATION_PRIMARY_EXAMINERS -> "En evaluación por jurados principales";
             case DISAGREEMENT_REQUIRES_TIEBREAKER -> "Desacuerdo, requiere desempate";
-            case UNDER_EVALUATION_TIEBREAKER -> "En evaluación por juez de desempate";
+            case UNDER_EVALUATION_TIEBREAKER -> "En evaluación por jurado de desempate";
             case EVALUATION_COMPLETED -> "Evaluación completada";
             case GRADED_APPROVED -> "Aprobado";
             case GRADED_FAILED -> "Reprobado";

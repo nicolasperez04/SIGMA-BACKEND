@@ -151,7 +151,7 @@ public class AdminController {
             ProgramAuthority assigned = adminService.assignExaminer(request);
             return ResponseEntity.ok(
                     Map.of(
-                            "message", "Se ha asignado el juez/evaluador (examiner) correctamente"
+                            "message", "Se ha asignado el jurado/evaluador (examiner) correctamente"
                     )
             );
 

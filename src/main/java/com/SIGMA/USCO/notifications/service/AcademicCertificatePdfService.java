@@ -1,10 +1,12 @@
 package com.SIGMA.USCO.notifications.service;
 
 import com.SIGMA.USCO.Modalities.Entity.AcademicCertificate;
+import com.SIGMA.USCO.Modalities.Entity.DefenseExaminer;
 import com.SIGMA.USCO.Modalities.Entity.StudentModality;
 import com.SIGMA.USCO.Modalities.Entity.StudentModalityMember;
 import com.SIGMA.USCO.Modalities.Entity.enums.AcademicDistinction;
 import com.SIGMA.USCO.Modalities.Entity.enums.CertificateStatus;
+import com.SIGMA.USCO.Modalities.Entity.enums.ModalityProcessStatus;
 import com.SIGMA.USCO.Modalities.Repository.AcademicCertificateRepository;
 import com.SIGMA.USCO.Users.Entity.User;
 import com.SIGMA.USCO.academic.entity.StudentProfile;
@@ -29,6 +31,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -224,17 +227,17 @@ public class AcademicCertificatePdfService {
             String members = studentModality.getMembers() != null && !studentModality.getMembers().isEmpty() ?
                     studentModality.getMembers().stream()
                             .map(m -> m.getStudent().getName() + " " + m.getStudent().getLastName() + " (" + m.getStudent().getEmail() + ")")
-                            .collect(java.util.stream.Collectors.joining(", ")) :
+                            .collect(Collectors.joining(", ")) :
                     student.getName() + " " + student.getLastName() + " (" + student.getEmail() + ")";
 
             // Jurados
             String examiners = "No asignados";
             try {
-                java.util.List<com.SIGMA.USCO.Modalities.Entity.DefenseExaminer> defenseExaminers = studentModality.getDefenseExaminers();
+                List<DefenseExaminer> defenseExaminers = studentModality.getDefenseExaminers();
                 if (defenseExaminers != null && !defenseExaminers.isEmpty()) {
                     examiners = defenseExaminers.stream()
                         .map(e -> e.getExaminer().getName() + " " + e.getExaminer().getLastName())
-                        .collect(java.util.stream.Collectors.joining(", "));
+                        .collect(Collectors.joining(", "));
                 }
             } catch (Exception e) {
                 // Si hay error, dejar "No asignados"
@@ -300,10 +303,10 @@ public class AcademicCertificatePdfService {
             }
 
             // Jurados principales
-            java.util.List<com.SIGMA.USCO.Modalities.Entity.DefenseExaminer> defenseExaminers = studentModality.getDefenseExaminers();
+            List<DefenseExaminer> defenseExaminers = studentModality.getDefenseExaminers();
             int juradoCount = defenseExaminers != null ? defenseExaminers.size() : 0;
             for (int i = 0; i < Math.min(juradoCount, 2); i++) {
-                com.SIGMA.USCO.Modalities.Entity.DefenseExaminer examiner = defenseExaminers.get(i);
+                DefenseExaminer examiner = defenseExaminers.get(i);
                 User jurado = examiner.getExaminer();
                 PdfPCell juradoCell = new PdfPCell();
                 juradoCell.setBorder(Rectangle.NO_BORDER);
@@ -331,7 +334,7 @@ public class AcademicCertificatePdfService {
 
             // Jurado de desempate (solo si aplica)
             boolean showTieBreaker = false;
-            com.SIGMA.USCO.Modalities.Entity.enums.ModalityProcessStatus status = studentModality.getStatus();
+            ModalityProcessStatus status = studentModality.getStatus();
             AcademicDistinction tieBreakerDistinction = studentModality.getAcademicDistinction();
             // Mostrar la firma del jurado de desempate si hay 3 jurados y la distinción es de desempate
             if (juradoCount >= 3 && status != null && defenseExaminers.size() >= 3) {
@@ -343,7 +346,7 @@ public class AcademicCertificatePdfService {
                 );
             }
             if (showTieBreaker) {
-                com.SIGMA.USCO.Modalities.Entity.DefenseExaminer tieBreakerExaminer = defenseExaminers.stream()
+                DefenseExaminer tieBreakerExaminer = defenseExaminers.stream()
                     .filter(e -> e.getExaminerType() != null && e.getExaminerType().name().equals("TIEBREAKER_EXAMINER"))
                     .findFirst()
                     .orElse(defenseExaminers.get(2)); // fallback por posición
@@ -528,30 +531,38 @@ public class AcademicCertificatePdfService {
     }
 
     // Traducción de estados de modalidad
-    private String translateModalityStatus(com.SIGMA.USCO.Modalities.Entity.enums.ModalityProcessStatus status) {
+    private String translateModalityStatus(ModalityProcessStatus status) {
         if (status == null) return "No registrado";
         return switch (status) {
             case MODALITY_SELECTED -> "Modalidad seleccionada";
             case UNDER_REVIEW_PROGRAM_HEAD -> "En revisión por Jefatura de Programa";
             case CORRECTIONS_REQUESTED_PROGRAM_HEAD -> "Correcciones solicitadas por Jefatura de Programa";
             case CORRECTIONS_SUBMITTED -> "Correcciones enviadas";
+            case CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD -> "Correcciones enviadas a Jefatura de Programa y/o Coordinación de Modalidades";
+            case CORRECTIONS_SUBMITTED_TO_COMMITTEE -> "Correcciones enviadas al Comité de Currículo";
+            case CORRECTIONS_SUBMITTED_TO_EXAMINERS -> "Correcciones enviadas a los Jurados";
             case CORRECTIONS_APPROVED -> "Correcciones aprobadas";
             case CORRECTIONS_REJECTED_FINAL -> "Correcciones rechazadas (final)";
             case READY_FOR_PROGRAM_CURRICULUM_COMMITTEE -> "Lista para Comité de Currículo";
             case UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE -> "En revisión por Comité de Currículo";
             case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE -> "Correcciones solicitadas por Comité de Currículo";
+            case READY_FOR_DIRECTOR_ASSIGNMENT -> "Lista para asignación de Director de Proyecto";
+            case READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE -> "Lista para aprobación por Comité de Currículo";
             case PROPOSAL_APPROVED -> "Propuesta aprobada";
             case DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR -> "Sustentación solicitada por Director de Proyecto";
             case DEFENSE_SCHEDULED -> "Sustentación programada";
-            case EXAMINERS_ASSIGNED -> "Jueces asignados";
-            case READY_FOR_EXAMINERS -> "Lista para jueces";
-            case CORRECTIONS_REQUESTED_EXAMINERS -> "Correcciones solicitadas por jueces";
+            case EXAMINERS_ASSIGNED -> "Jurados asignados";
+            case READY_FOR_EXAMINERS -> "Lista para jurados";
+            case DOCUMENTS_APPROVED_BY_EXAMINERS -> "Documentos de propuesta aprobados por los jurados";
+            case SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS -> "Documentos finales aprobados por los jurados";
+            case DOCUMENT_REVIEW_TIEBREAKER_REQUIRED -> "Revisión con desempate requerida por jurados";
+            case CORRECTIONS_REQUESTED_EXAMINERS -> "Correcciones solicitadas por jurados";
             case READY_FOR_DEFENSE -> "Lista para sustentación";
             case FINAL_REVIEW_COMPLETED -> "Revisión final completada";
             case DEFENSE_COMPLETED -> "Sustentación realizada";
-            case UNDER_EVALUATION_PRIMARY_EXAMINERS -> "En evaluación por jueces principales";
+            case UNDER_EVALUATION_PRIMARY_EXAMINERS -> "En evaluación por jurados principales";
             case DISAGREEMENT_REQUIRES_TIEBREAKER -> "Desacuerdo, requiere desempate";
-            case UNDER_EVALUATION_TIEBREAKER -> "En evaluación por juez de desempate";
+            case UNDER_EVALUATION_TIEBREAKER -> "En evaluación por jurado de desempate";
             case EVALUATION_COMPLETED -> "Evaluación completada";
             case GRADED_APPROVED -> "Aprobada";
             case GRADED_FAILED -> "No aprobada";

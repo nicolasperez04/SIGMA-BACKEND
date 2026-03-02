@@ -22,6 +22,15 @@ public enum ModalityProcessStatus {
     UNDER_REVIEW_PROGRAM_HEAD,
     CORRECTIONS_REQUESTED_PROGRAM_HEAD,
     CORRECTIONS_SUBMITTED,
+
+    CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD,
+
+
+    CORRECTIONS_SUBMITTED_TO_COMMITTEE,
+
+
+    CORRECTIONS_SUBMITTED_TO_EXAMINERS,
+
     CORRECTIONS_APPROVED,
     CORRECTIONS_REJECTED_FINAL,
 
@@ -29,6 +38,13 @@ public enum ModalityProcessStatus {
     READY_FOR_PROGRAM_CURRICULUM_COMMITTEE,
     UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE,
     CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE,
+
+
+    READY_FOR_DIRECTOR_ASSIGNMENT,
+
+    READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE,
+
+
     PROPOSAL_APPROVED,
 
     // ========== PROGRAMACIÓN DE SUSTENTACIÓN ==========
@@ -44,7 +60,24 @@ public enum ModalityProcessStatus {
     EXAMINERS_ASSIGNED,
     READY_FOR_EXAMINERS,
 
+    /**
+     * Todos los documentos obligatorios (MANDATORY) de la propuesta han sido aprobados
+     * por ambos jurados principales (o por el jurado de desempate si hubo conflicto).
+     * La modalidad puede avanzar a PROPOSAL_APPROVED.
+     */
+    DOCUMENTS_APPROVED_BY_EXAMINERS,
 
+    /**
+     * Todos los documentos finales (SECONDARY) han sido aprobados por los jurados.
+     * Estado intermedio antes de pasar a FINAL_REVIEW_COMPLETED.
+     */
+    SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS,
+
+    /**
+     * Los 2 jurados principales emitieron decisiones distintas sobre un documento
+     * (uno aprueba, el otro rechaza). Se requiere asignar jurado de desempate.
+     */
+    DOCUMENT_REVIEW_TIEBREAKER_REQUIRED,
 
     CORRECTIONS_REQUESTED_EXAMINERS,
 
@@ -62,20 +95,20 @@ public enum ModalityProcessStatus {
 
     /**
      * Los jueces principales están evaluando la sustentación
-     * Cada juez registra su calificación y decisión de forma independiente
+     * Cada jurado registra su calificación y decisión de forma independiente
      * Próximo paso: EVALUATION_COMPLETED o DISAGREEMENT_REQUIRES_TIEBREAKER
      */
     UNDER_EVALUATION_PRIMARY_EXAMINERS,
 
     /**
      * Los 2 jueces principales NO llegaron a un acuerdo
-     * Se requiere asignar un tercer juez (desempate)
-     * Próximo paso: UNDER_EVALUATION_TIEBREAKER (después de asignar el juez)
+     * Se requiere asignar un tercer jurado (desempate)
+     * Próximo paso: UNDER_EVALUATION_TIEBREAKER (después de asignar el jurado)
      */
     DISAGREEMENT_REQUIRES_TIEBREAKER,
 
     /**
-     * El juez de desempate está evaluando
+     * El jurado de desempate está evaluando
      * Su decisión será definitiva
      * Próximo paso: EVALUATION_COMPLETED
      */

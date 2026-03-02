@@ -111,7 +111,7 @@ public class StudentNotificationListener {
         StudentModality modality = document.getStudentModality();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Correcciones solicitadas en documento académico – Acción requerida";
         for (var member : members) {
@@ -151,7 +151,7 @@ public class StudentNotificationListener {
         """.formatted(
             student.getName(),
             event.getRequestedBy() == NotificationRecipientType.PROGRAM_HEAD
-                ? "la Jefatura de Programa"
+                ? "la Jefatura de Programa y/o Coordinación de Modalidades"
                 : "el Comité de Currículo del Programa",
             document.getDocumentConfig().getDocumentName(),
             event.getObservations() != null && !event.getObservations().isBlank()
@@ -179,7 +179,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             sm.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Solicitud de cancelación registrada – Modalidad de grado";
         for (var member : members) {
@@ -237,7 +237,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             sm.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Cancelación aprobada – Modalidad de grado";
         for (var member : members) {
@@ -296,7 +296,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             sm.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Cancelación no aprobada – Modalidad de grado";
         for (var member : members) {
@@ -360,7 +360,7 @@ public class StudentNotificationListener {
         User director = modality.getProjectDirector();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String studentSubject =
                 "Sustentación programada – Modalidad de Grado";
@@ -434,7 +434,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String studentSubject =
                 "Director de proyecto asignado – Modalidad de grado";
@@ -659,7 +659,7 @@ public class StudentNotificationListener {
         StudentModality modality = studentModalityRepository.findById(event.getStudentModalityId()).orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Modalidad de grado aprobada – Comité de Currículo";
         for (var member : members) {
@@ -730,7 +730,7 @@ public class StudentNotificationListener {
         StudentModality modality = studentModalityRepository.findById(event.getStudentModalityId()).orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Modalidad de grado aprobada – Jefatura de Programa";
         for (var member : members) {
@@ -794,7 +794,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Recordatorio oficial – Plazo de correcciones (%d días restantes)"
                 .formatted(event.getDaysRemaining());
@@ -869,7 +869,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Notificación oficial – Cancelación automática de modalidad por vencimiento de plazo";
         for (var member : members) {
@@ -943,7 +943,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Notificación oficial – Documento corregido recibido";
         for (var member : members) {
@@ -970,7 +970,7 @@ public class StudentNotificationListener {
             Estado actual del proceso:
             CORRECCIONES ENVIADAS – PENDIENTE DE REVISIÓN
 
-            El documento será evaluado por el jurado designado.
+            El documento será evaluado por las autoridades competentes.
             Una vez finalice la revisión, recibirá la notificación oficial
             con el resultado correspondiente.
 
@@ -1010,7 +1010,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Notificación oficial – Correcciones aprobadas";
         for (var member : members) {
@@ -1076,7 +1076,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Notificación oficial – Cancelación de modalidad por rechazo definitivo de correcciones";
         for (var member : members) {
@@ -1156,7 +1156,7 @@ public class StudentNotificationListener {
                 .orElseThrow();
         var members = studentModalityMemberRepository.findByStudentModalityIdAndStatus(
             modality.getId(),
-            com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+            MemberStatus.ACTIVE
         );
         String subject = "Notificación oficial – Cierre de modalidad por decisión del Comité de Currículo";
         for (var member : members) {
@@ -1460,7 +1460,7 @@ public class StudentNotificationListener {
                 3, // MAX_GROUP_SIZE
                 studentModalityMemberRepository.countByStudentModalityIdAndStatus(
                         modality.getId(),
-                        com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+                        MemberStatus.ACTIVE
                 )
         );
 
@@ -1779,7 +1779,7 @@ public class StudentNotificationListener {
         var members = studentModalityMemberRepository
                 .findByStudentModalityIdAndStatus(
                         modality.getId(),
-                        com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus.ACTIVE
+                        MemberStatus.ACTIVE
                 );
 
         String subject = "Notificación oficial – Modalidad aprobada por jurado evaluador";
@@ -1854,23 +1854,31 @@ public class StudentNotificationListener {
             case UNDER_REVIEW_PROGRAM_HEAD -> "En revisión por Jefatura";
             case CORRECTIONS_REQUESTED_PROGRAM_HEAD -> "Correcciones solicitadas por Jefatura";
             case CORRECTIONS_SUBMITTED -> "Correcciones enviadas";
+            case CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD -> "Correcciones enviadas a Jefatura de Programa y/o coordinador de modalidades";
+            case CORRECTIONS_SUBMITTED_TO_COMMITTEE -> "Correcciones enviadas al Comité de Currículo";
+            case CORRECTIONS_SUBMITTED_TO_EXAMINERS -> "Correcciones enviadas a los Jurados";
             case CORRECTIONS_APPROVED -> "Correcciones aprobadas";
             case CORRECTIONS_REJECTED_FINAL -> "Correcciones rechazadas (final)";
             case READY_FOR_PROGRAM_CURRICULUM_COMMITTEE -> "Lista para Comité de Currículo";
             case UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE -> "En revisión por Comité de Currículo";
             case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE -> "Correcciones solicitadas por Comité de Currículo";
+            case READY_FOR_DIRECTOR_ASSIGNMENT -> "Lista para asignación de Director de Proyecto";
+            case READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE -> "Lista para aprobación por Comité de Currículo";
             case PROPOSAL_APPROVED -> "Propuesta aprobada";
             case DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR -> "Sustentación solicitada por Director";
             case DEFENSE_SCHEDULED -> "Sustentación programada";
-            case EXAMINERS_ASSIGNED -> "Jueces asignados";
-            case READY_FOR_EXAMINERS -> "Lista para jueces";
-            case CORRECTIONS_REQUESTED_EXAMINERS -> "Correcciones solicitadas por jueces";
+            case EXAMINERS_ASSIGNED -> "Jurados asignados";
+            case READY_FOR_EXAMINERS -> "Lista para Jurados";
+            case DOCUMENTS_APPROVED_BY_EXAMINERS -> "Documentos de propuesta aprobados por los jurados";
+            case SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS -> "Documentos finales aprobados por los jurados";
+            case DOCUMENT_REVIEW_TIEBREAKER_REQUIRED -> "Revisión de documentos con desempate requerida";
+            case CORRECTIONS_REQUESTED_EXAMINERS -> "Correcciones solicitadas por Jurados";
             case READY_FOR_DEFENSE -> "Lista para sustentación";
             case FINAL_REVIEW_COMPLETED -> "Revisión final completada";
             case DEFENSE_COMPLETED -> "Sustentación realizada";
-            case UNDER_EVALUATION_PRIMARY_EXAMINERS -> "En evaluación por jueces principales";
+            case UNDER_EVALUATION_PRIMARY_EXAMINERS -> "En evaluación por jurados principales";
             case DISAGREEMENT_REQUIRES_TIEBREAKER -> "Desacuerdo, requiere desempate";
-            case UNDER_EVALUATION_TIEBREAKER -> "En evaluación por juez de desempate";
+            case UNDER_EVALUATION_TIEBREAKER -> "En evaluación por jurado de desempate";
             case EVALUATION_COMPLETED -> "Evaluación completada";
             case GRADED_APPROVED -> "Aprobado";
             case GRADED_FAILED -> "Reprobado";

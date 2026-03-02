@@ -70,6 +70,8 @@ public class ModalityService {
     private final SeminarRepository seminarRepository;
     private final ExaminerNotificationListener examinerNotificationListener;
     private final NotificationRepository notificationRepository;
+    private final ProposalEvaluationRepository proposalEvaluationRepository;
+    private final ExaminerDocumentReviewRepository examinerDocumentReviewRepository;
 
 
     @Value("${file.upload-dir}")
@@ -562,6 +564,8 @@ public class ModalityService {
                 )
         );
     }
+
+
     public ResponseEntity<?> uploadRequiredDocument(Long studentModalityId, Long requiredDocumentId, MultipartFile file) throws IOException {
 
         if (file == null || file.isEmpty()) {
@@ -643,33 +647,118 @@ public class ModalityService {
 
         studentDocument.setFileName(originalFilename);
         studentDocument.setFilePath(fullPath.toString());
-        studentDocument.setStatus(DocumentStatus.PENDING);
         studentDocument.setUploadDate(LocalDateTime.now());
-        studentDocumentRepository.save(studentDocument);
 
-        documentHistoryRepository.save(
-                StudentDocumentStatusHistory.builder()
-                        .studentDocument(studentDocument)
-                        .status(DocumentStatus.PENDING)
-                        .changeDate(LocalDateTime.now())
-                        .responsible(student)
-                        .observations("Documento cargado o actualizado por el estudiante")
-                        .build()
-        );
+        // ========== LÓGICA DE CORRECCIONES ==========
+        // Determinar si se trata de una resubida de correcciones según el estado actual de la modalidad
+        ModalityProcessStatus currentModalityStatus = studentModality.getStatus();
 
-        notificationEventPublisher.publish(
-                new StudentDocumentUpdatedEvent(studentModality.getId(), studentDocument.getId(), student.getId()
-                )
-        );
+        boolean isResubmittingCorrection =
+                currentModalityStatus == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD ||
+                currentModalityStatus == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE ||
+                currentModalityStatus == ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS;
 
-        // ========== VERIFICAR SI TODOS LOS DOCUMENTOS MANDATORY HAN SIDO SUBIDOS ==========
-        // Si todos los documentos obligatorios están subidos, cambiar el estado de la modalidad
-        checkAndUpdateModalityStatusIfAllMandatoryDocsUploaded(studentModality, student);
+        if (isResubmittingCorrection) {
+            // Marcar el documento como corrección reenviada
+            studentDocument.setStatus(DocumentStatus.CORRECTION_RESUBMITTED);
+            studentDocumentRepository.save(studentDocument);
+
+            // Si las correcciones venían de jurados, limpiar SOLO el voto del jurado que solicitó
+            // correcciones, conservando el voto ACCEPTED del jurado que ya aprobó
+            if (currentModalityStatus == ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS) {
+                List<ExaminerDocumentReview> oldReviews = examinerDocumentReviewRepository
+                        .findByStudentDocumentId(studentDocument.getId());
+                // Eliminar solo los votos de CORRECTIONS_REQUESTED; los ACCEPTED se conservan
+                List<ExaminerDocumentReview> reviewsToDelete = oldReviews.stream()
+                        .filter(r -> r.getDecision() == ExaminerDocumentDecision.CORRECTIONS_REQUESTED)
+                        .toList();
+                examinerDocumentReviewRepository.deleteAll(reviewsToDelete);
+            }
+
+            documentHistoryRepository.save(
+                    StudentDocumentStatusHistory.builder()
+                            .studentDocument(studentDocument)
+                            .status(DocumentStatus.CORRECTION_RESUBMITTED)
+                            .changeDate(LocalDateTime.now())
+                            .responsible(student)
+                            .observations("Documento corregido reenviado por el estudiante")
+                            .build()
+            );
+
+            // Determinar el nuevo estado de la modalidad según quién solicitó las correcciones
+            ModalityProcessStatus newModalityStatusAfterResubmit = switch (currentModalityStatus) {
+                case CORRECTIONS_REQUESTED_PROGRAM_HEAD ->
+                        ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD;
+                case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE ->
+                        ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE;
+                case CORRECTIONS_REQUESTED_EXAMINERS ->
+                        ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS;
+                default -> ModalityProcessStatus.CORRECTIONS_SUBMITTED;
+            };
+
+            String requesterLabel = switch (currentModalityStatus) {
+                case CORRECTIONS_REQUESTED_PROGRAM_HEAD -> "Jefatura de Programa y/o coordinación de modalidades";
+                case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE -> "Comité de Currículo de Programa";
+                case CORRECTIONS_REQUESTED_EXAMINERS -> "Jurado evaluador";
+                default -> "revisor";
+            };
+
+            // Cambiar el estado de la modalidad al estado específico
+            studentModality.setStatus(newModalityStatusAfterResubmit);
+            studentModality.setUpdatedAt(LocalDateTime.now());
+            studentModalityRepository.save(studentModality);
+
+            historyRepository.save(
+                    ModalityProcessStatusHistory.builder()
+                            .studentModality(studentModality)
+                            .status(newModalityStatusAfterResubmit)
+                            .changeDate(LocalDateTime.now())
+                            .responsible(student)
+                            .observations("Correcciones enviadas por el estudiante tras solicitud de: " + requesterLabel)
+                            .build()
+            );
+
+            notificationEventPublisher.publish(
+                    new CorrectionResubmittedEvent(
+                            studentModality.getId(),
+                            studentDocument.getId(),
+                            student.getId(),
+                            studentDocument.getDocumentConfig().getDocumentName(),
+                            student.getId()
+                    )
+            );
+
+        } else {
+            // Subida normal: estado PENDING
+            studentDocument.setStatus(DocumentStatus.PENDING);
+            studentDocumentRepository.save(studentDocument);
+
+            documentHistoryRepository.save(
+                    StudentDocumentStatusHistory.builder()
+                            .studentDocument(studentDocument)
+                            .status(DocumentStatus.PENDING)
+                            .changeDate(LocalDateTime.now())
+                            .responsible(student)
+                            .observations("Documento cargado o actualizado por el estudiante")
+                            .build()
+            );
+
+            notificationEventPublisher.publish(
+                    new StudentDocumentUpdatedEvent(studentModality.getId(), studentDocument.getId(), student.getId())
+            );
+
+            // ========== VERIFICAR SI TODOS LOS DOCUMENTOS MANDATORY HAN SIDO SUBIDOS ==========
+            checkAndUpdateModalityStatusIfAllMandatoryDocsUploaded(studentModality, student);
+        }
 
         return ResponseEntity.ok(
                 Map.of(
-                        "message", "Documento subido correctamente",
-                        "path", fullPath.toString()
+                        "message", isResubmittingCorrection
+                                ? "Documento de corrección enviado correctamente. Será revisado por el evaluador correspondiente."
+                                : "Documento subido correctamente",
+                        "path", fullPath.toString(),
+                        "documentStatus", studentDocument.getStatus().name(),
+                        "modalityStatus", studentModality.getStatus().name()
                 )
         );
     }
@@ -956,11 +1045,34 @@ public class ModalityService {
         StudentDocument document = studentDocumentRepository.findById(studentDocumentId)
                 .orElseThrow(() -> new RuntimeException("Document not found"));
 
+
+
+        if (document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD) {
+            return ResponseEntity.badRequest().body(
+                    Map.of(
+                            "success", false,
+                            "message", "No se puede cambiar el estado del documento porque está en estado " + document.getStatus() + ". El estudiante debe primero corregir y resubir el documento para que pueda ser revisado por jefatura de programa nuevamente."
+                    )
+            );
+        }
+
+
+        if (document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_CURRICULUM_COMMITTEE ||
+           document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER){
+            return ResponseEntity.badRequest().body(
+                    Map.of(
+                            "success", false,
+                            "message", "No se puede cambiar el estado del documento porque está en estado " + document.getStatus() + ". El estudiante debe primero corregir y resubir el documento para que pueda ser revisado por el comité de currículo o los jurados evaluadores nuevamente."
+                    )
+            );
+        }
+
         // Validación de estado permitido
         DocumentStatus currentStatus = document.getStatus();
         if (currentStatus != DocumentStatus.PENDING &&
             currentStatus != DocumentStatus.ACCEPTED_FOR_PROGRAM_HEAD_REVIEW &&
-            currentStatus != DocumentStatus.REJECTED_FOR_PROGRAM_HEAD_REVIEW) {
+            currentStatus != DocumentStatus.REJECTED_FOR_PROGRAM_HEAD_REVIEW &&
+            currentStatus !=  DocumentStatus.CORRECTION_RESUBMITTED) {
             return ResponseEntity.badRequest().body(
                 Map.of(
                     "success", false,
@@ -969,6 +1081,19 @@ public class ModalityService {
                 )
             );
         }
+
+        ModalityProcessStatus modalityStatus = document.getStudentModality().getStatus();
+
+        if (modalityStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS ||
+             modalityStatus == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE) {
+            return ResponseEntity.badRequest().body(
+                    Map.of(
+                            "success", false,
+                            "message", "No se puede cambiar el estado del documento porque la modalidad está en estado " + modalityStatus + ". El estudiante debe primero corregir y resubir el documento para que pueda ser revisado por el comité de currículo o los jurados evaluadores nuevamente."
+                    )
+            );
+        }
+
 
         AcademicProgram documentProgram = document.getStudentModality().getAcademicProgram();
 
@@ -1130,7 +1255,9 @@ public class ModalityService {
 
 
         if (!(studentModality.getStatus() == ModalityProcessStatus.UNDER_REVIEW_PROGRAM_HEAD ||
-                studentModality.getStatus() == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD)) {
+                studentModality.getStatus() == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD ||
+                studentModality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD
+                )) {
 
             return ResponseEntity.badRequest().body(
                     Map.of(
@@ -1258,8 +1385,7 @@ public class ModalityService {
             );
         }
 
-        if (!(studentModality.getStatus() == ModalityProcessStatus.READY_FOR_PROGRAM_CURRICULUM_COMMITTEE ||
-                studentModality.getStatus() == ModalityProcessStatus.UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE)) {
+        if (studentModality.getStatus() != ModalityProcessStatus.READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE){
 
             return ResponseEntity.badRequest().body(
                     Map.of(
@@ -1310,6 +1436,867 @@ public class ModalityService {
 
 
     @Transactional
+    public ResponseEntity<?> reviewStudentDocumentByExaminer(Long studentDocumentId, DocumentReviewDTO request) {
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String email = auth.getName();
+
+        User examiner = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+
+        boolean hasExaminerRole = examiner.getRoles().stream()
+                .anyMatch(role -> role.getName().equals("EXAMINER"));
+
+        if (!hasExaminerRole) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                    Map.of("success", false, "message", "El usuario no tiene rol de EXAMINER")
+            );
+        }
+
+        StudentDocument document = studentDocumentRepository.findById(studentDocumentId)
+                .orElseThrow(() -> new RuntimeException("Documento no encontrado"));
+
+        StudentModality studentModality = document.getStudentModality();
+
+
+        DefenseExaminer defenseExaminer = defenseExaminerRepository
+                .findByStudentModalityIdAndExaminerId(studentModality.getId(), examiner.getId())
+                .orElse(null);
+
+        if (defenseExaminer == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                    Map.of("success", false, "message", "No estás asignado como jurado de esta modalidad")
+            );
+        }
+
+        ExaminerType examinerType = defenseExaminer.getExaminerType();
+
+        // Validar que el documento no esté bloqueado esperando al estudiante
+        if (document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", "No se puede cambiar el estado del documento porque está en estado " +
+                            document.getStatus() + ". El estudiante debe primero corregir y resubir el documento."
+            ));
+        }
+
+        // ===== VALIDACIÓN: Un jurado no puede cambiar su decisión una vez emitida =====
+        // Excepción: si su decisión anterior fue CORRECTIONS_REQUESTED, el estudiante resubió
+        // y ahora el jurado debe re-evaluar la nueva versión del documento.
+        ExaminerDocumentReview existingReview = examinerDocumentReviewRepository
+                .findByStudentDocumentIdAndExaminerId(document.getId(), examiner.getId())
+                .orElse(null);
+
+        if (existingReview != null) {
+            ExaminerDocumentDecision previousDecision = existingReview.getDecision();
+
+            if (previousDecision == ExaminerDocumentDecision.ACCEPTED) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "success", false,
+                        "message", "Ya aprobaste este documento. Una vez emitida la aprobación no puede ser modificada.",
+                        "yourPreviousDecision", previousDecision.name()
+                ));
+            }
+
+            if (previousDecision == ExaminerDocumentDecision.REJECTED) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "success", false,
+                        "message", "Ya rechazaste este documento. Una vez emitido el rechazo no puede ser modificado.",
+                        "yourPreviousDecision", previousDecision.name()
+                ));
+            }
+
+            // Si previousDecision == CORRECTIONS_REQUESTED: el jurado puede re-votar
+            // porque el estudiante resubió el documento con las correcciones.
+            // Verificamos que el documento esté efectivamente en estado de resubmisión.
+            if (previousDecision == ExaminerDocumentDecision.CORRECTIONS_REQUESTED) {
+                if (document.getStatus() != DocumentStatus.CORRECTION_RESUBMITTED) {
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "success", false,
+                            "message", "Solicitaste correcciones en este documento. Debes esperar a que el estudiante resuba el documento corregido antes de emitir una nueva evaluación.",
+                            "yourPreviousDecision", previousDecision.name(),
+                            "documentStatus", document.getStatus().name()
+                    ));
+                }
+            }
+        }
+        // =============================================================================
+
+        if (request.getStatus() != DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW &&
+                request.getStatus() != DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW &&
+                request.getStatus() != DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", "Estado de documento inválido para revisión por jurado"
+            ));
+        }
+
+        if ((request.getStatus() == DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW ||
+                request.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER)
+                && (request.getNotes() == null || request.getNotes().isBlank())) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "success", false,
+                    "message", "Debe proporcionar notas al rechazar o solicitar correcciones"
+            ));
+        }
+
+        // Determinar la decisión individual del jurado
+        ExaminerDocumentDecision individualDecision = switch (request.getStatus()) {
+            case ACCEPTED_FOR_EXAMINER_REVIEW -> ExaminerDocumentDecision.ACCEPTED;
+            case REJECTED_FOR_EXAMINER_REVIEW -> ExaminerDocumentDecision.REJECTED;
+            case CORRECTIONS_REQUESTED_BY_EXAMINER -> ExaminerDocumentDecision.CORRECTIONS_REQUESTED;
+            default -> throw new IllegalArgumentException("Estado inválido");
+        };
+
+        // Guardar/actualizar la review individual del jurado
+        ExaminerDocumentReview review = examinerDocumentReviewRepository
+                .findByStudentDocumentIdAndExaminerId(document.getId(), examiner.getId())
+                .orElse(ExaminerDocumentReview.builder()
+                        .studentDocument(document)
+                        .examiner(examiner)
+                        .isTiebreakerVote(examinerType == ExaminerType.TIEBREAKER_EXAMINER)
+                        .build());
+        review.setDecision(individualDecision);
+        review.setNotes(request.getNotes());
+        review.setReviewedAt(LocalDateTime.now());
+        review.setIsTiebreakerVote(examinerType == ExaminerType.TIEBREAKER_EXAMINER);
+        examinerDocumentReviewRepository.save(review);
+
+        // Guardar historial del documento
+        documentHistoryRepository.save(
+                StudentDocumentStatusHistory.builder()
+                        .studentDocument(document)
+                        .status(request.getStatus())
+                        .changeDate(LocalDateTime.now())
+                        .responsible(examiner)
+                        .observations("Jurado " + examiner.getName() + " " + examiner.getLastName() +
+                                " (" + examinerType.name() + "): " +
+                                (request.getNotes() != null ? request.getNotes() : individualDecision.name()))
+                        .build()
+        );
+
+        // Manejar ProposalEvaluation si aplica
+        if (document.getDocumentConfig().getDocumentType() == DocumentType.MANDATORY
+                && request.getProposalEvaluation() != null) {
+            ProposalEvaluationRequest evalReq = request.getProposalEvaluation();
+            if (evalReq.getSummary() == null || evalReq.getBackgroundJustification() == null
+                    || evalReq.getProblemStatement() == null || evalReq.getObjectives() == null
+                    || evalReq.getMethodology() == null || evalReq.getBibliographyReferences() == null
+                    || evalReq.getDocumentOrganization() == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "success", false,
+                        "message", "Debe proporcionar calificaciones para todos los aspectos de la propuesta de grado"
+                ));
+            }
+            ProposalEvaluation proposalEvaluation = proposalEvaluationRepository
+                    .findByStudentDocumentIdAndExaminerId(document.getId(), examiner.getId())
+                    .orElse(null);
+            if (proposalEvaluation != null) {
+                proposalEvaluation.setSummary(evalReq.getSummary());
+                proposalEvaluation.setBackgroundJustification(evalReq.getBackgroundJustification());
+                proposalEvaluation.setProblemStatement(evalReq.getProblemStatement());
+                proposalEvaluation.setObjectives(evalReq.getObjectives());
+                proposalEvaluation.setMethodology(evalReq.getMethodology());
+                proposalEvaluation.setBibliographyReferences(evalReq.getBibliographyReferences());
+                proposalEvaluation.setDocumentOrganization(evalReq.getDocumentOrganization());
+                proposalEvaluation.setEvaluatedAt(LocalDateTime.now());
+            } else {
+                proposalEvaluation = ProposalEvaluation.builder()
+                        .studentDocument(document)
+                        .examiner(examiner)
+                        .summary(evalReq.getSummary())
+                        .backgroundJustification(evalReq.getBackgroundJustification())
+                        .problemStatement(evalReq.getProblemStatement())
+                        .objectives(evalReq.getObjectives())
+                        .methodology(evalReq.getMethodology())
+                        .bibliographyReferences(evalReq.getBibliographyReferences())
+                        .documentOrganization(evalReq.getDocumentOrganization())
+                        .evaluatedAt(LocalDateTime.now())
+                        .build();
+            }
+            proposalEvaluationRepository.save(proposalEvaluation);
+        }
+
+        // ===== LÓGICA DE CONSENSO ENTRE JURADOS =====
+        ResponseEntity<?> consensusResult = processExaminerConsensus(
+                document, studentModality, examiner, examinerType, individualDecision, request.getNotes()
+        );
+        if (consensusResult != null) {
+            // Si el consenso retorna un resultado especial (rechazo final), devolvemos ese
+            return consensusResult;
+        }
+
+        // Construir respuesta
+        String message = switch (request.getStatus()) {
+            case ACCEPTED_FOR_EXAMINER_REVIEW -> "Documento aceptado por el jurado. Se evaluará el veredicto de todos los jurados.";
+            case REJECTED_FOR_EXAMINER_REVIEW -> "Documento rechazado por el jurado. Se evaluará el veredicto de todos los jurados.";
+            case CORRECTIONS_REQUESTED_BY_EXAMINER -> "Correcciones solicitadas. El estudiante deberá subir el documento corregido.";
+            default -> "Documento revisado correctamente";
+        };
+
+        ProposalEvaluation savedProposalEvaluation = proposalEvaluationRepository
+                .findByStudentDocumentIdAndExaminerId(document.getId(), examiner.getId())
+                .orElse(null);
+
+        Map<String, Object> responseBody = new java.util.HashMap<>();
+        responseBody.put("success", true);
+        responseBody.put("documentId", document.getId());
+        responseBody.put("documentName", document.getDocumentConfig().getDocumentName());
+        responseBody.put("examinerDecision", individualDecision.name());
+        responseBody.put("currentDocumentStatus", document.getStatus());
+        responseBody.put("examinerName", examiner.getName() + " " + examiner.getLastName());
+        responseBody.put("examinerType", examinerType.name());
+        responseBody.put("message", message);
+
+        if (savedProposalEvaluation != null) {
+            Map<String, Object> proposalEvaluationInfo = new java.util.HashMap<>();
+            proposalEvaluationInfo.put("id", savedProposalEvaluation.getId());
+            proposalEvaluationInfo.put("summary", savedProposalEvaluation.getSummary());
+            proposalEvaluationInfo.put("backgroundJustification", savedProposalEvaluation.getBackgroundJustification());
+            proposalEvaluationInfo.put("problemStatement", savedProposalEvaluation.getProblemStatement());
+            proposalEvaluationInfo.put("objectives", savedProposalEvaluation.getObjectives());
+            proposalEvaluationInfo.put("methodology", savedProposalEvaluation.getMethodology());
+            proposalEvaluationInfo.put("bibliographyReferences", savedProposalEvaluation.getBibliographyReferences());
+            proposalEvaluationInfo.put("documentOrganization", savedProposalEvaluation.getDocumentOrganization());
+            proposalEvaluationInfo.put("evaluatedAt", savedProposalEvaluation.getEvaluatedAt());
+            responseBody.put("proposalEvaluation", proposalEvaluationInfo);
+        } else {
+            responseBody.put("proposalEvaluation", null);
+        }
+
+        return ResponseEntity.ok(responseBody);
+    }
+
+    /**
+     * Procesa el consenso entre jurados sobre un documento.
+     * Implementa la lógica:
+     * - Ambos jurados primarios aprueban → documento aprobado, verificar si todos los MANDATORY están aprobados
+     * - Uno aprueba + otro solicita correcciones → estudiante debe corregir hasta que el jurado que solicitó correcciones apruebe.
+     * - Uno aprueba + otro rechaza → se requiere jurado de desempate (DOCUMENT_REVIEW_TIEBREAKER_REQUIRED)
+     * - Jurado de desempate decide (cualquier decisión) → se aplica su decisión
+     *
+     * @return ResponseEntity si hay un resultado final especial (rechazo), null si continúa normal
+     */
+    private ResponseEntity<?> processExaminerConsensus(StudentDocument document, StudentModality studentModality, User examiner, ExaminerType examinerType, ExaminerDocumentDecision individualDecision, String notes) {
+
+        Long documentId = document.getId();
+        Long modalityId = studentModality.getId();
+
+        // Si es el jurado de desempate, su decisión es definitiva
+        if (examinerType == ExaminerType.TIEBREAKER_EXAMINER) {
+            return processTiebreakerDocumentDecision(document, studentModality, examiner, individualDecision, notes);
+        }
+
+        // Obtener los dos jurados primarios
+        List<DefenseExaminer> primaryExaminers = defenseExaminerRepository
+                .findPrimaryExaminersByStudentModalityId(modalityId);
+
+        if (primaryExaminers.size() < 2) {
+            // Solo hay un jurado asignado, su decisión es suficiente
+            applyExaminerDecisionToDocument(document, studentModality, examiner, individualDecision, notes, true);
+            return null;
+        }
+
+        // Recolectar las reviews de los dos jurados primarios para ESTE documento
+        List<ExaminerDocumentReview> primaryReviews = new ArrayList<>();
+        for (DefenseExaminer pe : primaryExaminers) {
+            examinerDocumentReviewRepository
+                    .findByStudentDocumentIdAndExaminerId(documentId, pe.getExaminer().getId())
+                    .ifPresent(primaryReviews::add);
+        }
+
+        // Si aún no han votado ambos jurados primarios en la ronda actual, esperar al segundo
+        if (primaryReviews.size() < 2) {
+            // Determinar quién ya votó (el que aprobó previamente y conservó su voto)
+            boolean hasExistingAccepted = primaryReviews.stream()
+                    .anyMatch(r -> r.getDecision() == ExaminerDocumentDecision.ACCEPTED);
+
+            // Si quien ya votó aprobó, el documento está en revisión pendiente del que solicitó correcciones
+            if (hasExistingAccepted) {
+                // El documento está esperando que el jurado que solicitó correcciones vote de nuevo
+                // Conservar el estado actual (CORRECTION_RESUBMITTED) sin sobreescribirlo a PENDING
+                document.setNotes("Aprobado por un jurado. Esperando revisión del jurado que solicitó correcciones (" +
+                        primaryReviews.size() + "/2 votos).");
+            } else {
+                // Primer voto registrado, esperando al segundo jurado primario
+                document.setStatus(DocumentStatus.PENDING);
+                document.setNotes("En revisión por jurados. Evaluaciones recibidas: " + primaryReviews.size() + "/2");
+            }
+            studentDocumentRepository.save(document);
+            return null;
+        }
+
+        // Ambos jurados primarios han votado — analizar el resultado
+        ExaminerDocumentDecision decision1 = primaryReviews.get(0).getDecision();
+        ExaminerDocumentDecision decision2 = primaryReviews.get(1).getDecision();
+
+        // CASO 1: Ambos aprueban
+        if (decision1 == ExaminerDocumentDecision.ACCEPTED && decision2 == ExaminerDocumentDecision.ACCEPTED) {
+            document.setStatus(DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW);
+            document.setNotes("Aprobado por ambos jurados principales");
+            studentDocumentRepository.save(document);
+
+            historyRepository.save(ModalityProcessStatusHistory.builder()
+                    .studentModality(studentModality)
+                    .status(studentModality.getStatus())
+                    .changeDate(LocalDateTime.now())
+                    .responsible(examiner)
+                    .observations("Ambos jurados principales aprobaron el documento: " +
+                            document.getDocumentConfig().getDocumentName())
+                    .build());
+
+            // Verificar si todos los documentos del mismo tipo están aprobados
+            checkAndTransitionIfAllMandatoryApprovedByExaminers(document, studentModality, examiner);
+            return null;
+        }
+
+        // CASO 2: Ambos solicitan correcciones o ambos rechazan
+        if (decision1 == ExaminerDocumentDecision.CORRECTIONS_REQUESTED && decision2 == ExaminerDocumentDecision.CORRECTIONS_REQUESTED) {
+            return applyCorrectionsRequestedByPrimaryExaminers(document, studentModality, examiner, primaryReviews, notes);
+        }
+
+        if (decision1 == ExaminerDocumentDecision.REJECTED && decision2 == ExaminerDocumentDecision.REJECTED) {
+            return applyRejectionByBothPrimaryExaminers(document, studentModality, examiner, notes);
+        }
+
+        // CASO 3: Uno aprueba, el otro solicita correcciones → el estudiante debe corregir
+        boolean oneApprovedOneCorrected =
+                (decision1 == ExaminerDocumentDecision.ACCEPTED && decision2 == ExaminerDocumentDecision.CORRECTIONS_REQUESTED) ||
+                (decision1 == ExaminerDocumentDecision.CORRECTIONS_REQUESTED && decision2 == ExaminerDocumentDecision.ACCEPTED);
+        if (oneApprovedOneCorrected) {
+            String combinedNotes = primaryReviews.stream()
+                    .filter(r -> r.getDecision() == ExaminerDocumentDecision.CORRECTIONS_REQUESTED)
+                    .map(r -> r.getNotes() != null ? r.getNotes() : "")
+                    .collect(Collectors.joining("; "));
+            return applyCorrectionsRequestedByPrimaryExaminers(document, studentModality, examiner, primaryReviews, combinedNotes);
+        }
+
+        // CASO 4: Uno aprueba, el otro rechaza → DESEMPATE REQUERIDO (único caso de desempate)
+        boolean tiebreakerRequired =
+                (decision1 == ExaminerDocumentDecision.ACCEPTED && decision2 == ExaminerDocumentDecision.REJECTED) ||
+                (decision1 == ExaminerDocumentDecision.REJECTED && decision2 == ExaminerDocumentDecision.ACCEPTED);
+
+        if (tiebreakerRequired) {
+            document.setStatus(DocumentStatus.PENDING);
+            document.setNotes("Decisión dividida: un jurado aprobó y el otro rechazó. Se requiere jurado de desempate.");
+            studentDocumentRepository.save(document);
+
+            studentModality.setStatus(ModalityProcessStatus.DOCUMENT_REVIEW_TIEBREAKER_REQUIRED);
+            studentModality.setUpdatedAt(LocalDateTime.now());
+            studentModalityRepository.save(studentModality);
+
+            historyRepository.save(ModalityProcessStatusHistory.builder()
+                    .studentModality(studentModality)
+                    .status(ModalityProcessStatus.DOCUMENT_REVIEW_TIEBREAKER_REQUIRED)
+                    .changeDate(LocalDateTime.now())
+                    .responsible(examiner)
+                    .observations("Un jurado aprobó y el otro rechazó el documento '" +
+                            document.getDocumentConfig().getDocumentName() +
+                            "'. Se requiere jurado de desempate para resolver.")
+                    .build());
+            return null;
+        }
+
+        // CASO 5: Uno rechaza, el otro solicita correcciones → el estudiante corrige;
+        // solo el jurado que solicitó correcciones debe re-votar; el que rechazó conserva su voto REJECTED.
+        // Cuando el que solicitó correcciones vuelva a votar, se re-evaluará el consenso:
+        //   - Si aprueba → REJECTED + ACCEPTED → entra a desempate (CASO 4)
+        //   - Si rechaza → REJECTED + REJECTED → rechazo definitivo
+        //   - Si vuelve a pedir correcciones → ciclo se repite
+        boolean rejectedVsCorrections =
+                (decision1 == ExaminerDocumentDecision.REJECTED && decision2 == ExaminerDocumentDecision.CORRECTIONS_REQUESTED) ||
+                (decision1 == ExaminerDocumentDecision.CORRECTIONS_REQUESTED && decision2 == ExaminerDocumentDecision.REJECTED);
+
+        if (rejectedVsCorrections) {
+            // Obtener las notas del jurado que solicitó correcciones
+            String correctionNotes = primaryReviews.stream()
+                    .filter(r -> r.getDecision() == ExaminerDocumentDecision.CORRECTIONS_REQUESTED)
+                    .map(r -> r.getNotes() != null ? r.getNotes() : "")
+                    .findFirst()
+                    .orElse(notes != null ? notes : "");
+
+            int currentAttempts = studentModality.getCorrectionAttempts() == null ? 0 : studentModality.getCorrectionAttempts();
+            int newAttempts = currentAttempts + 1;
+
+            if (newAttempts > 3) {
+                // Agotó intentos → rechazo definitivo
+                studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL);
+                studentModality.setCorrectionAttempts(newAttempts);
+                studentModality.setUpdatedAt(LocalDateTime.now());
+                studentModalityRepository.save(studentModality);
+
+                document.setStatus(DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER);
+                document.setNotes(correctionNotes);
+                studentDocumentRepository.save(document);
+
+                historyRepository.save(ModalityProcessStatusHistory.builder()
+                        .studentModality(studentModality)
+                        .status(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL)
+                        .changeDate(LocalDateTime.now())
+                        .responsible(examiner)
+                        .observations("Rechazado definitivamente tras agotar 3 intentos de corrección. " +
+                                "Documento: " + document.getDocumentConfig().getDocumentName())
+                        .build());
+
+                List<StudentModalityMember> members = studentModalityMemberRepository
+                        .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+                for (StudentModalityMember member : members) {
+                    notificationEventPublisher.publish(new CorrectionRejectedFinalEvent(
+                            studentModality.getId(), document.getId(),
+                            member.getStudent().getId(),
+                            document.getDocumentConfig().getDocumentName(),
+                            correctionNotes, examiner.getId()));
+                }
+
+                return ResponseEntity.ok(Map.of(
+                        "success", true,
+                        "message", "La propuesta ha sido rechazada definitivamente. El estudiante agotó las 3 oportunidades.",
+                        "documentId", document.getId(),
+                        "newModalityStatus", ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL,
+                        "attemptsUsed", newAttempts
+                ));
+            }
+
+            // Solicitar correcciones: solo el jurado que las pidió deberá re-votar
+            document.setStatus(DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER);
+            document.setNotes("Correcciones solicitadas por un jurado (el otro rechazó). " +
+                    "Una vez corregido, el jurado que solicitó correcciones decidirá si aprueba o rechaza.\n" +
+                    correctionNotes);
+            studentDocumentRepository.save(document);
+
+            studentModality.setCorrectionAttempts(newAttempts);
+            studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS);
+            LocalDateTime now = LocalDateTime.now();
+            studentModality.setCorrectionRequestDate(now);
+            studentModality.setCorrectionDeadline(now.plusDays(30));
+            studentModality.setCorrectionReminderSent(false);
+            studentModality.setUpdatedAt(now);
+            studentModalityRepository.save(studentModality);
+
+            historyRepository.save(ModalityProcessStatusHistory.builder()
+                    .studentModality(studentModality)
+                    .status(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS)
+                    .changeDate(now)
+                    .responsible(examiner)
+                    .observations("Un jurado rechazó y el otro solicitó correcciones (intento " + newAttempts +
+                            " de 3). El estudiante debe corregir para que el jurado que solicitó correcciones " +
+                            "decida si aprueba o rechaza. Observaciones: " + correctionNotes)
+                    .build());
+
+            List<StudentModalityMember> activeMembers = studentModalityMemberRepository
+                    .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+            for (StudentModalityMember member : activeMembers) {
+                notificationEventPublisher.publish(new DocumentCorrectionsRequestedEvent(
+                        document.getId(), member.getStudent().getId(),
+                        "Un jurado rechazó el documento y el otro solicitó correcciones. " +
+                        "Por favor corrija y resuba el documento. Observaciones: " + correctionNotes,
+                        NotificationRecipientType.PROGRAM_CURRICULUM_COMMITTEE, examiner.getId()
+                ));
+            }
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Aplica la decisión del jurado de desempate sobre el documento (es definitiva).
+     */
+    private ResponseEntity<?> processTiebreakerDocumentDecision(StudentDocument document, StudentModality studentModality, User tiebreaker, ExaminerDocumentDecision decision, String notes) {
+
+        switch (decision) {
+            case ACCEPTED -> {
+                document.setStatus(DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW);
+                document.setNotes("Aprobado por el jurado de desempate");
+                studentDocumentRepository.save(document);
+
+                historyRepository.save(ModalityProcessStatusHistory.builder()
+                        .studentModality(studentModality)
+                        .status(studentModality.getStatus())
+                        .changeDate(LocalDateTime.now())
+                        .responsible(tiebreaker)
+                        .observations("Jurado de desempate aprobó el documento: " +
+                                document.getDocumentConfig().getDocumentName())
+                        .build());
+
+                checkAndTransitionIfAllMandatoryApprovedByExaminers(document, studentModality, tiebreaker);
+            }
+            case CORRECTIONS_REQUESTED -> {
+                applyCorrectionsRequestedFromTiebreaker(document, studentModality, tiebreaker, notes);
+            }
+            case REJECTED -> {
+                applyRejectionByTiebreaker(document, studentModality, tiebreaker, notes);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Aplica correcciones solicitadas por jurados primarios al estudiante.
+     */
+    private ResponseEntity<?> applyCorrectionsRequestedByPrimaryExaminers(StudentDocument document, StudentModality studentModality, User examiner, List<ExaminerDocumentReview> reviews, String notes) {
+
+        int currentAttempts = studentModality.getCorrectionAttempts() == null ? 0 : studentModality.getCorrectionAttempts();
+        int newAttempts = currentAttempts + 1;
+
+        if (newAttempts > 3) {
+            studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL);
+            studentModality.setCorrectionAttempts(newAttempts);
+            studentModality.setUpdatedAt(LocalDateTime.now());
+            studentModalityRepository.save(studentModality);
+
+            historyRepository.save(ModalityProcessStatusHistory.builder()
+                    .studentModality(studentModality)
+                    .status(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL)
+                    .changeDate(LocalDateTime.now())
+                    .responsible(examiner)
+                    .observations("Rechazado definitivamente. El estudiante agotó 3 oportunidades de corrección. Documento: " +
+                            document.getDocumentConfig().getDocumentName())
+                    .build());
+
+            List<StudentModalityMember> members = studentModalityMemberRepository
+                    .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+            for (StudentModalityMember member : members) {
+                notificationEventPublisher.publish(new CorrectionRejectedFinalEvent(
+                        studentModality.getId(), document.getId(),
+                        member.getStudent().getId(),
+                        document.getDocumentConfig().getDocumentName(),
+                        notes, examiner.getId()));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "La propuesta ha sido rechazada definitivamente. El estudiante agotó las 3 oportunidades.",
+                    "documentId", document.getId(),
+                    "newModalityStatus", ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL,
+                    "attemptsUsed", newAttempts
+            ));
+        }
+
+        String combinedNotes = reviews.stream()
+                .filter(r -> r.getDecision() == ExaminerDocumentDecision.CORRECTIONS_REQUESTED && r.getNotes() != null)
+                .map(ExaminerDocumentReview::getNotes)
+                .collect(Collectors.joining(" | "));
+        if (combinedNotes.isBlank() && notes != null) combinedNotes = notes;
+
+        document.setStatus(DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER);
+        document.setNotes(combinedNotes);
+        studentDocumentRepository.save(document);
+
+        studentModality.setCorrectionAttempts(newAttempts);
+        studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS);
+        LocalDateTime now = LocalDateTime.now();
+        studentModality.setCorrectionRequestDate(now);
+        studentModality.setCorrectionDeadline(now.plusDays(30));
+        studentModality.setCorrectionReminderSent(false);
+        studentModality.setUpdatedAt(now);
+        studentModalityRepository.save(studentModality);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS)
+                .changeDate(now)
+                .responsible(examiner)
+                .observations("Jurados solicitaron correcciones (intento " + newAttempts + " de 3): " + combinedNotes)
+                .build());
+
+        List<StudentModalityMember> activeMembers = studentModalityMemberRepository
+                .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+        for (StudentModalityMember member : activeMembers) {
+            notificationEventPublisher.publish(new DocumentCorrectionsRequestedEvent(
+                    document.getId(), member.getStudent().getId(),
+                    combinedNotes, NotificationRecipientType.PROGRAM_CURRICULUM_COMMITTEE, examiner.getId()
+            ));
+        }
+        return null;
+    }
+
+    /**
+     * Aplica correcciones solicitadas por el jurado de desempate.
+     */
+    private void applyCorrectionsRequestedFromTiebreaker(StudentDocument document, StudentModality studentModality, User tiebreaker, String notes) {
+
+        int currentAttempts = studentModality.getCorrectionAttempts() == null ? 0 : studentModality.getCorrectionAttempts();
+        int newAttempts = currentAttempts + 1;
+
+        document.setStatus(DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER);
+        document.setNotes(notes);
+        studentDocumentRepository.save(document);
+
+        studentModality.setCorrectionAttempts(newAttempts);
+        studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS);
+        LocalDateTime now = LocalDateTime.now();
+        studentModality.setCorrectionRequestDate(now);
+        studentModality.setCorrectionDeadline(now.plusDays(30));
+        studentModality.setCorrectionReminderSent(false);
+        studentModality.setUpdatedAt(now);
+        studentModalityRepository.save(studentModality);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS)
+                .changeDate(now)
+                .responsible(tiebreaker)
+                .observations("Jurado de desempate solicitó correcciones: " + notes)
+                .build());
+
+        List<StudentModalityMember> activeMembers = studentModalityMemberRepository
+                .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+        for (StudentModalityMember member : activeMembers) {
+            notificationEventPublisher.publish(new DocumentCorrectionsRequestedEvent(
+                    document.getId(), member.getStudent().getId(),
+                    notes, NotificationRecipientType.PROGRAM_CURRICULUM_COMMITTEE, tiebreaker.getId()
+            ));
+        }
+    }
+
+    /**
+     * Aplica rechazo definitivo por ambos jurados primarios.
+     */
+    private ResponseEntity<?> applyRejectionByBothPrimaryExaminers(StudentDocument document, StudentModality studentModality, User examiner, String notes) {
+
+        studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL);
+        studentModality.setUpdatedAt(LocalDateTime.now());
+        studentModalityRepository.save(studentModality);
+
+        document.setStatus(DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW);
+        document.setNotes("Rechazado por ambos jurados principales");
+        studentDocumentRepository.save(document);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL)
+                .changeDate(LocalDateTime.now())
+                .responsible(examiner)
+                .observations("Ambos jurados principales rechazaron el documento: " +
+                        document.getDocumentConfig().getDocumentName())
+                .build());
+
+        List<StudentModalityMember> members = studentModalityMemberRepository
+                .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+        for (StudentModalityMember member : members) {
+            notificationEventPublisher.publish(new CorrectionRejectedFinalEvent(
+                    studentModality.getId(), document.getId(),
+                    member.getStudent().getId(),
+                    document.getDocumentConfig().getDocumentName(),
+                    "Rechazado por ambos jurados principales. " + (notes != null ? notes : ""),
+                    examiner.getId()));
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "message", "El documento fue rechazado por ambos jurados principales.",
+                "documentId", document.getId(),
+                "newModalityStatus", ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL
+        ));
+    }
+
+    /**
+     * Aplica rechazo definitivo por el jurado de desempate.
+     */
+    private void applyRejectionByTiebreaker(StudentDocument document, StudentModality studentModality, User tiebreaker, String notes) {
+
+        studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL);
+        studentModality.setUpdatedAt(LocalDateTime.now());
+        studentModalityRepository.save(studentModality);
+
+        document.setStatus(DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW);
+        document.setNotes("Rechazado por el jurado de desempate");
+        studentDocumentRepository.save(document);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL)
+                .changeDate(LocalDateTime.now())
+                .responsible(tiebreaker)
+                .observations("Jurado de desempate rechazó el documento: " +
+                        document.getDocumentConfig().getDocumentName() + ". " + (notes != null ? notes : ""))
+                .build());
+
+        List<StudentModalityMember> members = studentModalityMemberRepository
+                .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+        for (StudentModalityMember member : members) {
+            notificationEventPublisher.publish(new CorrectionRejectedFinalEvent(
+                    studentModality.getId(), document.getId(),
+                    member.getStudent().getId(),
+                    document.getDocumentConfig().getDocumentName(),
+                    "Rechazado por jurado de desempate. " + (notes != null ? notes : ""),
+                    tiebreaker.getId()));
+        }
+    }
+
+    /**
+     * Aplica la decisión del examiner al documento directamente (cuando solo hay un jurado).
+     */
+    private void applyExaminerDecisionToDocument(StudentDocument document, StudentModality studentModality, User examiner, ExaminerDocumentDecision decision, String notes, boolean singleExaminer) {
+
+        DocumentStatus newStatus = switch (decision) {
+            case ACCEPTED -> DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW;
+            case REJECTED -> DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW;
+            case CORRECTIONS_REQUESTED -> DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER;
+        };
+        document.setStatus(newStatus);
+        document.setNotes(notes);
+        studentDocumentRepository.save(document);
+
+        if (decision == ExaminerDocumentDecision.ACCEPTED) {
+            checkAndTransitionIfAllMandatoryApprovedByExaminers(document, studentModality, examiner);
+        }
+    }
+
+    /**
+     * Punto de entrada: se invoca cada vez que un documento es aprobado por consenso de jurados.
+     * Usa el TIPO del documento (MANDATORY o SECONDARY) para determinar la fase y delegar.
+     *
+     * - Documento MANDATORY aprobado → verifica si todos los MANDATORY están listos → PROPOSAL_APPROVED
+     * - Documento SECONDARY aprobado → verifica si todos los SECONDARY están listos → FINAL_REVIEW_COMPLETED
+     */
+    private void checkAndTransitionIfAllMandatoryApprovedByExaminers(StudentDocument approvedDocument, StudentModality studentModality, User responsible) {
+        DocumentType approvedDocType = approvedDocument.getDocumentConfig().getDocumentType();
+
+        if (approvedDocType == DocumentType.SECONDARY) {
+            checkAndTransitionIfAllSecondaryApprovedByExaminers(studentModality, responsible);
+        } else {
+            // MANDATORY (o cualquier otro tipo en fase de propuesta)
+            checkAndTransitionIfAllMandatoryDocs(studentModality, responsible);
+        }
+    }
+
+    /**
+     * Sobrecarga de compatibilidad cuando no se tiene el documento disponible.
+     * Usa el estado de la modalidad como heurístico de fase.
+     * NOTA: preferir siempre la versión con documento cuando sea posible.
+     */
+    private void checkAndTransitionIfAllMandatoryApprovedByExaminers(StudentModality studentModality, User responsible) {
+        // Heurístico: READY_FOR_DEFENSE indica que la modalidad está en fase de revisión de SECONDARY
+        boolean isSecondaryPhase = studentModality.getStatus() == ModalityProcessStatus.READY_FOR_DEFENSE;
+        if (isSecondaryPhase) {
+            checkAndTransitionIfAllSecondaryApprovedByExaminers(studentModality, responsible);
+        } else {
+            checkAndTransitionIfAllMandatoryDocs(studentModality, responsible);
+        }
+    }
+
+    /**
+     * Verifica que todos los documentos MANDATORY estén en ACCEPTED_FOR_EXAMINER_REVIEW.
+     * Si es así → DOCUMENTS_APPROVED_BY_EXAMINERS → PROPOSAL_APPROVED + notificaciones.
+     */
+    private void checkAndTransitionIfAllMandatoryDocs(StudentModality studentModality, User responsible) {
+        Long modalityId = studentModality.getProgramDegreeModality().getDegreeModality().getId();
+
+        List<RequiredDocument> mandatoryDocs = requiredDocumentRepository
+                .findByModalityIdAndActiveTrueAndDocumentType(modalityId, DocumentType.MANDATORY);
+
+        if (mandatoryDocs.isEmpty()) return;
+
+        for (RequiredDocument reqDoc : mandatoryDocs) {
+            StudentDocument doc = studentDocumentRepository
+                    .findByStudentModalityIdAndDocumentConfigId(studentModality.getId(), reqDoc.getId())
+                    .orElse(null);
+            if (doc == null || doc.getStatus() != DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW) {
+                return; // Aún hay documentos MANDATORY sin aprobar
+            }
+        }
+
+        // ✅ Todos los MANDATORY aprobados
+        studentModality.setStatus(ModalityProcessStatus.DOCUMENTS_APPROVED_BY_EXAMINERS);
+        studentModality.setUpdatedAt(LocalDateTime.now());
+        studentModalityRepository.save(studentModality);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.DOCUMENTS_APPROVED_BY_EXAMINERS)
+                .changeDate(LocalDateTime.now())
+                .responsible(responsible)
+                .observations("Todos los documentos obligatorios (propuesta) aprobados por los jurados. " +
+                        "Procediendo automáticamente a la aprobación de la propuesta.")
+                .build());
+
+        // → PROPOSAL_APPROVED automático
+        studentModality.setStatus(ModalityProcessStatus.PROPOSAL_APPROVED);
+        studentModality.setUpdatedAt(LocalDateTime.now());
+        studentModalityRepository.save(studentModality);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.PROPOSAL_APPROVED)
+                .changeDate(LocalDateTime.now())
+                .responsible(responsible)
+                .observations("Propuesta aprobada automáticamente por consenso de jurados.")
+                .build());
+
+        List<StudentModalityMember> activeMembers = studentModalityMemberRepository
+                .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+        for (StudentModalityMember member : activeMembers) {
+            notificationEventPublisher.publish(
+                    new ModalityApprovedByExaminers(studentModality.getId(), member.getStudent().getId())
+            );
+        }
+    }
+
+    /**
+     * Verifica que todos los documentos SECONDARY estén en ACCEPTED_FOR_EXAMINER_REVIEW.
+     * Si es así → SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS → FINAL_REVIEW_COMPLETED
+     * + ExaminerFinalReviewCompletedEvent (notifica al director para programar sustentación).
+     */
+    private void checkAndTransitionIfAllSecondaryApprovedByExaminers(StudentModality studentModality, User responsible) {
+        Long modalityId = studentModality.getProgramDegreeModality().getDegreeModality().getId();
+
+        List<RequiredDocument> secondaryDocs = requiredDocumentRepository
+                .findByModalityIdAndActiveTrueAndDocumentType(modalityId, DocumentType.SECONDARY);
+
+        if (secondaryDocs.isEmpty()) return;
+
+        for (RequiredDocument reqDoc : secondaryDocs) {
+            StudentDocument doc = studentDocumentRepository
+                    .findByStudentModalityIdAndDocumentConfigId(studentModality.getId(), reqDoc.getId())
+                    .orElse(null);
+            if (doc == null || doc.getStatus() != DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW) {
+                return; // Aún hay documentos SECONDARY sin aprobar
+            }
+        }
+
+        // ✅ Todos los SECONDARY aprobados → estado intermedio trazable
+        studentModality.setStatus(ModalityProcessStatus.SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS);
+        studentModality.setUpdatedAt(LocalDateTime.now());
+        studentModalityRepository.save(studentModality);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS)
+                .changeDate(LocalDateTime.now())
+                .responsible(responsible)
+                .observations("Todos los documentos finales (SECONDARY) aprobados por consenso de jurados. " +
+                        "Procediendo automáticamente a completar la revisión final.")
+                .build());
+
+        // → FINAL_REVIEW_COMPLETED automático
+        studentModality.setStatus(ModalityProcessStatus.FINAL_REVIEW_COMPLETED);
+        studentModality.setUpdatedAt(LocalDateTime.now());
+        studentModalityRepository.save(studentModality);
+
+        historyRepository.save(ModalityProcessStatusHistory.builder()
+                .studentModality(studentModality)
+                .status(ModalityProcessStatus.FINAL_REVIEW_COMPLETED)
+                .changeDate(LocalDateTime.now())
+                .responsible(responsible)
+                .observations("Revisión final completada automáticamente por aprobación de jurados. " +
+                        "Notificando al director de proyecto para programar la sustentación.")
+                .build());
+
+        // → Notificar al director para que programe la sustentación
+        User projectDirector = studentModality.getProjectDirector();
+        if (projectDirector != null) {
+            notificationEventPublisher.publish(
+                    new ExaminerFinalReviewCompletedEvent(
+                            studentModality.getId(),
+                            projectDirector.getId()
+                    )
+            );
+        }
+    }
+
+    @Transactional
     public ResponseEntity<?> approveModalityByExaminers(Long studentModalityId) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         String email = auth.getName();
@@ -1338,12 +2325,16 @@ public class ModalityService {
             );
         }
 
-        if (!(studentModality.getStatus() == ModalityProcessStatus.EXAMINERS_ASSIGNED)) {
+
+        if (studentModality.getStatus() != ModalityProcessStatus.EXAMINERS_ASSIGNED &&
+            studentModality.getStatus() != ModalityProcessStatus.DOCUMENTS_APPROVED_BY_EXAMINERS) {
             return ResponseEntity.badRequest().body(
                     Map.of(
                             "approved", false,
-                            "message", "La modalidad no está en un estado válido para ser aprobada por los jueces",
-                            "currentStatus", studentModality.getStatus()
+                            "message", "La modalidad debe estar en estado EXAMINERS_ASSIGNED o DOCUMENTS_APPROVED_BY_EXAMINERS. " +
+                                       "Todos los documentos obligatorios deben haber sido aceptados por los jurados.",
+                            "currentStatus", studentModality.getStatus().name(),
+                            "requiredStatus", ModalityProcessStatus.EXAMINERS_ASSIGNED.name()
                     )
             );
         }
@@ -1394,7 +2385,7 @@ public class ModalityService {
             return ResponseEntity.badRequest().body(
                     Map.of(
                             "approved", false,
-                            "message", "Para poder aprobar la modalidad, todos los documentos obligatorios deben estar aceptados por los jueces",
+                            "message", "Para poder aprobar la modalidad, todos los documentos obligatorios deben estar aceptados por los jurados",
                             "documents", invalidDocuments
                     )
             );
@@ -1410,7 +2401,7 @@ public class ModalityService {
                         .status(ModalityProcessStatus.PROPOSAL_APPROVED)
                         .changeDate(LocalDateTime.now())
                         .responsible(examiner)
-                        .observations("Modalidad aprobada por los jueces")
+                        .observations("Modalidad aprobada por los jurados")
                         .build()
         );
 
@@ -1430,10 +2421,11 @@ public class ModalityService {
                 Map.of(
                         "approved", true,
                         "newStatus", ModalityProcessStatus.PROPOSAL_APPROVED,
-                        "message", "Modalidad aprobada correctamente por los jueces"
+                        "message", "Modalidad aprobada correctamente por los jurados"
                 )
         );
     }
+
 
     public ResponseEntity<?> reviewStudentDocumentByCommittee(Long studentDocumentId, DocumentReviewDTO request) {
 
@@ -1444,11 +2436,45 @@ public class ModalityService {
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
         StudentDocument document = studentDocumentRepository.findById(studentDocumentId)
-                .orElseThrow(() -> new RuntimeException("Document not found"));
-
+                .orElseThrow(() -> new RuntimeException("Documento no encontrado"));
 
         StudentModality studentModality = document.getStudentModality();
         Long academicProgramId = studentModality.getAcademicProgram().getId();
+        if (document.getStatus() == DocumentStatus.REJECTED_FOR_PROGRAM_HEAD_REVIEW ||
+            document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD) {
+            return ResponseEntity.badRequest().body(
+                Map.of(
+                    "success", false,
+                    "message", "No se puede cambiar el estado del documento porque está en estado " + document.getStatus() + ". El estudiante debe primero corregir y resubir el documento para que pueda ser revisado por el comité de currículo de programa."
+                )
+            );
+        }
+
+        // Validación: no permitir revisión si la modalidad está en un estado propio de la jefatura de programa
+        ModalityProcessStatus modalityStatus = studentModality.getStatus();
+        if (modalityStatus == ModalityProcessStatus.UNDER_REVIEW_PROGRAM_HEAD ||
+            modalityStatus == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD ||
+            modalityStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD) {
+            return ResponseEntity.badRequest().body(
+                Map.of(
+                    "success", false,
+                    "message", "No se puede revisar el documento en este momento. La modalidad se encuentra en estado '" +
+                               describeModalityStatus(modalityStatus) + "', que corresponde a una etapa de revisión por parte de la Jefatura de Programa. El comité podrá revisar el documento una vez la jefatura finalice su proceso."
+                )
+            );
+        }
+
+        if (modalityStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS) {
+            return ResponseEntity.badRequest().body(
+                Map.of(
+                    "success", false,
+                    "message", "No se puede revisar el documento en este momento. La modalidad se encuentra en estado '" +
+                               describeModalityStatus(modalityStatus) + "', que corresponde a una etapa de correcciones ya resubmited por parte del estudiante. El comité podrá revisar el documento una vez el estudiante resubmita las correcciones y la modalidad vuelva a un estado de revisión."
+                )
+            );
+        }
+
+
 
         boolean isAuthorized =
                 programAuthorityRepository
@@ -1476,6 +2502,10 @@ public class ModalityService {
                     "Debe proporcionar notas al rechazar o solicitar correcciones"
             );
         }
+
+
+
+
 
 
         document.setStatus(request.getStatus());
@@ -1522,6 +2552,22 @@ public class ModalityService {
                                         document.getDocumentConfig().getDocumentName())
                                 .build()
                 );
+
+                // Notificar a todos los estudiantes miembros de la modalidad
+                List<StudentModalityMember> membersToNotify = studentModalityMemberRepository
+                        .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
+                for (StudentModalityMember member : membersToNotify) {
+                    notificationEventPublisher.publish(
+                            new CorrectionRejectedFinalEvent(
+                                    studentModality.getId(),
+                                    document.getId(),
+                                    member.getStudent().getId(),
+                                    document.getDocumentConfig().getDocumentName(),
+                                    request.getNotes(),
+                                    committeeMember.getId()
+                            )
+                    );
+                }
 
                 return ResponseEntity.ok(
                         Map.of(
@@ -1580,6 +2626,59 @@ public class ModalityService {
             }
         }
 
+        // ========== VERIFICAR SI TODOS LOS MANDATORY HAN SIDO APROBADOS POR EL COMITÉ ==========
+        if (request.getStatus() == DocumentStatus.ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW) {
+
+            DegreeModality degreeModality = studentModality.getProgramDegreeModality().getDegreeModality();
+
+            // Obtener todos los documentos MANDATORY configurados para esta modalidad
+            List<RequiredDocument> mandatoryDocs = requiredDocumentRepository
+                    .findByModalityIdAndActiveTrueAndDocumentType(degreeModality.getId(), DocumentType.MANDATORY);
+
+            // Obtener los documentos subidos por el estudiante para esta modalidad
+            List<StudentDocument> uploadedDocs = studentDocumentRepository
+                    .findByStudentModalityId(studentModality.getId());
+
+            // Verificar si todos los MANDATORY están en estado ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW
+            boolean allMandatoryApproved = !mandatoryDocs.isEmpty() && mandatoryDocs.stream().allMatch(req ->
+                    uploadedDocs.stream().anyMatch(uploaded ->
+                            uploaded.getDocumentConfig().getId().equals(req.getId()) &&
+                            uploaded.getStatus() == DocumentStatus.ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW
+                    )
+            );
+
+            if (allMandatoryApproved &&
+                studentModality.getStatus() != ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT) {
+
+                studentModality.setStatus(ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT);
+                studentModality.setUpdatedAt(LocalDateTime.now());
+                studentModalityRepository.save(studentModality);
+
+                historyRepository.save(
+                        ModalityProcessStatusHistory.builder()
+                                .studentModality(studentModality)
+                                .status(ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT)
+                                .changeDate(LocalDateTime.now())
+                                .responsible(committeeMember)
+                                .observations("Todos los documentos obligatorios han sido aprobados por el Comité de Currículo. " +
+                                        "La modalidad está lista para la asignación del Director de Proyecto.")
+                                .build()
+                );
+
+                return ResponseEntity.ok(
+                        Map.of(
+                                "success", true,
+                                "documentId", document.getId(),
+                                "documentName", document.getDocumentConfig().getDocumentName(),
+                                "newStatus", document.getStatus(),
+                                "newModalityStatus", ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT.name(),
+                                "message", "Documento aprobado. Todos los documentos obligatorios han sido aprobados. " +
+                                           "La modalidad está lista para la asignación del Director de Proyecto."
+                        )
+                );
+            }
+        }
+
         return ResponseEntity.ok(
                 Map.of(
                         "success", true,
@@ -1591,179 +2690,48 @@ public class ModalityService {
         );
     }
 
-    @Transactional
-    public ResponseEntity<?> reviewStudentDocumentByExaminer(Long studentDocumentId, DocumentReviewDTO request) {
+    private boolean checkIfAllMandatoryDocumentsAcceptedByAllExaminers(Long studentModalityId) {
 
+        StudentModality sm = studentModalityRepository.findById(studentModalityId).orElse(null);
+        if (sm == null) return false;
 
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        String email = auth.getName();
+        Long modalityId = sm.getProgramDegreeModality().getDegreeModality().getId();
 
-        User examiner = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado"));
+        // Obtener todos los documentos requeridos MANDATORY activos para esta modalidad
+        List<RequiredDocument> mandatoryDocuments = requiredDocumentRepository
+                .findByModalityIdAndActiveTrueAndDocumentType(modalityId, DocumentType.MANDATORY);
 
-
-        boolean hasExaminerRole = examiner.getRoles().stream()
-                .anyMatch(role -> role.getName().equals("EXAMINER"));
-
-        if (!hasExaminerRole) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
-                    Map.of(
-                            "success", false,
-                            "message", "El usuario no tiene rol de EXAMINER"
-                    )
-            );
+        if (mandatoryDocuments.isEmpty()) {
+            return false;
         }
 
+        // Verificar que haya al menos un jurado asignado
+        List<DefenseExaminer> assignedExaminers = defenseExaminerRepository
+                .findByStudentModalityId(studentModalityId);
 
-        StudentDocument document = studentDocumentRepository.findById(studentDocumentId)
-                .orElseThrow(() -> new RuntimeException("Documento no encontrado"));
-
-        StudentModality studentModality = document.getStudentModality();
-
-
-        boolean isAssignedToModality = defenseExaminerRepository
-                .findByStudentModalityIdAndExaminerId(studentModality.getId(), examiner.getId())
-                .isPresent();
-
-        if (!isAssignedToModality) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
-                    Map.of(
-                            "success", false,
-                            "message", "No estás asignado como juez de esta modalidad"
-                    )
-            );
+        if (assignedExaminers.isEmpty()) {
+            return false;
         }
 
+        // Para cada documento MANDATORY verificar que su estado ACTUAL sea ACCEPTED_FOR_EXAMINER_REVIEW
+        for (RequiredDocument reqDoc : mandatoryDocuments) {
+            StudentDocument document = studentDocumentRepository
+                    .findByStudentModalityIdAndDocumentConfigId(studentModalityId, reqDoc.getId())
+                    .orElse(null);
 
-        if ((request.getStatus() == DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW ||
-                request.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER)
-                && (request.getNotes() == null || request.getNotes().isBlank())) {
-
-            return ResponseEntity.badRequest().body(
-                    Map.of(
-                            "success", false,
-                            "message", "Debe proporcionar notas al rechazar o solicitar correcciones"
-                    )
-            );
-        }
-
-
-        if (request.getStatus() != DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW &&
-                request.getStatus() != DocumentStatus.REJECTED_FOR_EXAMINER_REVIEW &&
-                request.getStatus() != DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER) {
-
-            return ResponseEntity.badRequest().body(
-                    Map.of(
-                            "success", false,
-                            "message", "Estado de documento inválido para revisión por juez"
-                    )
-            );
-        }
-
-
-        document.setStatus(request.getStatus());
-        document.setNotes(request.getNotes());
-        document.setUploadDate(LocalDateTime.now());
-        studentDocumentRepository.save(document);
-
-
-        documentHistoryRepository.save(
-                StudentDocumentStatusHistory.builder()
-                        .studentDocument(document)
-                        .status(request.getStatus())
-                        .changeDate(LocalDateTime.now())
-                        .responsible(examiner)
-                        .observations(request.getNotes())
-                        .build()
-        );
-
-
-        if (request.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER) {
-
-
-            studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS);
-
-            LocalDateTime now = LocalDateTime.now();
-            studentModality.setCorrectionRequestDate(now);
-            studentModality.setCorrectionDeadline(now.plusDays(30));
-            studentModality.setCorrectionReminderSent(false);
-            studentModality.setUpdatedAt(now);
-            studentModalityRepository.save(studentModality);
-
-
-            historyRepository.save(
-                    ModalityProcessStatusHistory.builder()
-                            .studentModality(studentModality)
-                            .status(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS)
-                            .changeDate(now)
-                            .responsible(examiner)
-                            .observations("Juez " + examiner.getName() + " " + examiner.getLastName() +
-                                    " solicitó correcciones: " + request.getNotes())
-                            .build()
-            );
-
-
-            List<StudentModalityMember> activeMembers = studentModalityMemberRepository
-                    .findByStudentModalityIdAndStatus(studentModality.getId(), MemberStatus.ACTIVE);
-
-
-            for (StudentModalityMember member : activeMembers) {
-                notificationEventPublisher.publish(
-                        new DocumentCorrectionsRequestedEvent(
-                                document.getId(),
-                                member.getStudent().getId(),
-                                request.getNotes(),
-                                NotificationRecipientType.PROGRAM_CURRICULUM_COMMITTEE,
-                                examiner.getId()
-                        )
-                );
+            // Si no fue subido aún, no están todos aceptados
+            if (document == null) {
+                return false;
             }
-        }
-        else if (request.getStatus() == DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW) {
 
-
-            boolean allDocumentsAcceptedByAllExaminers = checkIfAllDocumentsAcceptedByAllExaminers(studentModality.getId());
-
-            if (allDocumentsAcceptedByAllExaminers) {
-
-                studentModality.setStatus(ModalityProcessStatus.PROPOSAL_APPROVED);
-                studentModality.setUpdatedAt(LocalDateTime.now());
-                studentModalityRepository.save(studentModality);
-
-
-                historyRepository.save(
-                        ModalityProcessStatusHistory.builder()
-                                .studentModality(studentModality)
-                                .status(ModalityProcessStatus.PROPOSAL_APPROVED)
-                                .changeDate(LocalDateTime.now())
-                                .responsible(examiner)
-                                .observations("Todos los documentos han sido aprobados por todos los jueces. " +
-                                        "La modalidad está lista para la sustentación.")
-                                .build()
-                );
+            // Si el estado actual del documento NO es ACCEPTED_FOR_EXAMINER_REVIEW, no están todos aceptados
+            if (document.getStatus() != DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW) {
+                return false;
             }
         }
 
-
-        String message = switch (request.getStatus()) {
-            case ACCEPTED_FOR_EXAMINER_REVIEW -> "Documento aceptado correctamente por el juez";
-            case REJECTED_FOR_EXAMINER_REVIEW -> "Documento rechazado por el juez";
-            case CORRECTIONS_REQUESTED_BY_EXAMINER -> "Correcciones solicitadas al estudiante. Cuando resuba el documento, volverá directamente a revisión del juez";
-            default -> "Documento revisado correctamente";
-        };
-
-        return ResponseEntity.ok(
-                Map.of(
-                        "success", true,
-                        "documentId", document.getId(),
-                        "documentName", document.getDocumentConfig().getDocumentName(),
-                        "newStatus", document.getStatus(),
-                        "examinerName", examiner.getName() + " " + examiner.getLastName(),
-                        "message", message
-                )
-        );
+        return true;
     }
-
 
     private boolean checkIfAllDocumentsAcceptedByAllExaminers(Long studentModalityId) {
 
@@ -1868,47 +2836,63 @@ public class ModalityService {
             case MODALITY_SELECTED ->
                     "Haz seleccionado una modalidad de grado. Debes cargar los documentos requeridos para esta modalidad.";
             case UNDER_REVIEW_PROGRAM_HEAD ->
-                    "La jefatura del programa está revisando la modalidad de grado. Asegúrate de que todos los documentos obligatorios estén cargados.";
+                    "La jefatura del programa y/o coordinación de modalidades está revisando la modalidad de grado. Asegúrate de que todos los documentos obligatorios estén cargados.";
             case CORRECTIONS_REQUESTED_PROGRAM_HEAD ->
-                    "La jefatura del programa solicitó correcciones. Debes ajustar la información requerida.";
+                    "La jefatura del programa y/o coordinación de modalidades solicitó correcciones. Debes ajustar la información requerida.";
             case CORRECTIONS_SUBMITTED ->
-                    "Has enviado las correcciones solicitadas por la jefatura del programa. Espera la revisión y respuesta.";
+                    "Las correcciones solicitadas han sido enviadas. Pendiente de aprobación o nuevas observaciones.";
+            case CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD ->
+                    "Las correcciones han sido enviadas a la Jefatura de Programa y/o coordinador de modalidades para su revisión.";
+            case CORRECTIONS_SUBMITTED_TO_COMMITTEE ->
+                    "Las correcciones han sido enviadas al Comité de Currículo de Programa para su revisión.";
+            case CORRECTIONS_SUBMITTED_TO_EXAMINERS ->
+                    "Las correcciones han sido enviadas a los Jurados evaluadores para su revisión.";
             case CORRECTIONS_APPROVED ->
                     "Las correcciones enviadas han sido aprobadas por la jefatura del programa. El proceso continúa con la siguiente etapa.";
             case CORRECTIONS_REJECTED_FINAL ->
-                    "Las correcciones enviadas no fueron aprobadas por la jefatura del programa. El proceso ha sido cerrado o cancelado.";
+                    "Las correcciones enviadas no fueron aprobadas y agotaste el límite de intentos (3). El proceso ha sido cerrado o cancelado.";
             case READY_FOR_PROGRAM_CURRICULUM_COMMITTEE ->
-                    "La jefatura de programa aprobó la modalidad de grado. Está pendiente de revisión por el comité de currículo de programa.";
+                    "La jefatura de programa y/o cordinación de modalidades aprobó la modalidad de grado. Está pendiente de revisión por el comité de currículo de programa.";
             case UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE ->
                     "El comité de currículo de programa está revisando la modalidad de grado.";
             case CORRECTIONS_REQUESTED_PROGRAM_CURRICULUM_COMMITTEE ->
                     "El comité de currículo de programa solicitó correcciones. Debes ajustar la información requerida.";
+            case READY_FOR_DIRECTOR_ASSIGNMENT ->
+                    "Todos los documentos obligatorios han sido aprobados por el Comité de Currículo. El comité procederá a asignar el Director de Proyecto.";
+            case READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE ->
+                    "El Director de Proyecto ha sido asignado. El comité de currículo puede proceder con la aprobación formal de la propuesta.";
             case PROPOSAL_APPROVED ->
-                    "La modalidad fue aprobada por el comité de currículo de programa y los jurados asignados.";
+                    "La modalidad fue aprobada por el comité de currículo de programa y los jurados asignados. Por favor, continua con el desarrollo normal de tu modalidad de grado.";
             case DEFENSE_REQUESTED_BY_PROJECT_DIRECTOR ->
                     "El director de proyecto ha propuesto fecha y lugar de sustentación. Pendiente de confirmación...";
             case DEFENSE_SCHEDULED ->
                     "La sustentación ha sido programada por el director de proyecto";
             case EXAMINERS_ASSIGNED ->
-                    "Los jueces han sido asignados a la modalidad. Próximo paso: revisión de documentos por parte de los jueces.";
+                    "Los jurados han sido asignados a la modalidad. Próximo paso: revisión de documentos por parte de los jurados.";
             case READY_FOR_EXAMINERS ->
-                    "La modalidad está lista para ser revisada por los jueces asignados. Próximo paso: sustentación y evaluación.";
+                    "La modalidad está lista para ser revisada por los jurados asignados. Próximo paso: sustentación y evaluación.";
+            case DOCUMENTS_APPROVED_BY_EXAMINERS ->
+                    "Todos los documentos obligatorios de la propuesta han sido aprobados por los jurados. La modalidad avanza a aprobación de propuesta.";
+            case SECONDARY_DOCUMENTS_APPROVED_BY_EXAMINERS ->
+                    "Todos los documentos finales han sido aprobados por los jurados. La modalidad avanza a revisión final completada.";
+            case DOCUMENT_REVIEW_TIEBREAKER_REQUIRED ->
+                    "Los jurados principales tienen decisiones divididas sobre un documento. Se requiere un jurado de desempate para resolver el conflicto.";
             case CORRECTIONS_REQUESTED_EXAMINERS ->
-                    "Uno o más jueces solicitaron correcciones en la documentación. Por favor, ajusta los documentos según las observaciones recibidas.";
+                    "Uno o más jurados solicitaron correcciones en la documentación. Por favor, ajusta los documentos según las observaciones recibidas.";
             case READY_FOR_DEFENSE ->
-                    "El director de proyecto ha marcado la modalidad como lista para sustentar. Esperando que comité de curriculum del programa junto a los jueces designados, revisen los documentos finales y den su aprobación.";
+                    "El director de proyecto ha marcado la modalidad como lista para sustentar. Esperando que comité de curriculum del programa junto a los jurados designados, revisen los documentos finales y den su aprobación.";
             case FINAL_REVIEW_COMPLETED ->
-                    "La revisión final de los jueces ha sido completada. Próximo paso: calificación y cierre del proceso.";
+                    "La revisión final de los jurados ha sido completada. Próximo paso: Director de proyecto programa la sustentación.";
             case DEFENSE_COMPLETED ->
                     "La sustentación se ha completado. Pendiente de calificación final.";
             case UNDER_EVALUATION_PRIMARY_EXAMINERS ->
-                    "Los jueces principales están evaluando la sustentación. Cada juez registra su calificación y decisión de forma independiente.";
+                    "Los jurados principales están evaluando la sustentación. Cada jurado registra su calificación y decisión de forma independiente.";
             case DISAGREEMENT_REQUIRES_TIEBREAKER ->
-                    "Los jueces principales no llegaron a un acuerdo. Se requiere asignar un tercer juez (desempate).";
+                    "Los jurados principales no llegaron a un acuerdo. Se requiere asignar un tercer jurado (desempate).";
             case UNDER_EVALUATION_TIEBREAKER ->
-                    "El juez de desempate está evaluando la sustentación. Su decisión será definitiva.";
+                    "El jurado de desempate está evaluando la sustentación. Su decisión será definitiva.";
             case EVALUATION_COMPLETED ->
-                    "La evaluación de la sustentación ha sido completada por los jueces. Próximo paso: resultado final.";
+                    "La evaluación de la sustentación ha sido completada por los jurados. Próximo paso: resultado final.";
             case GRADED_APPROVED ->
                     "¡Felicitaciones! Tu modalidad de grado ha sido aprobada.";
             case GRADED_FAILED ->
@@ -3526,8 +4510,6 @@ public class ModalityService {
         );
     }
 
-
-
     public ResponseEntity<?> requestCancellation(Long studentModalityId) {
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -4054,14 +5036,15 @@ public class ModalityService {
         }
 
 
-        if (studentModality.getStatus() == ModalityProcessStatus.MODALITY_SELECTED ||
-                studentModality.getStatus() == ModalityProcessStatus.CORRECTIONS_REQUESTED_PROGRAM_HEAD) {
-
+        if (studentModality.getStatus() != ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT) {
             return ResponseEntity.badRequest().body(
                     Map.of(
                             "success", false,
-                            "message", "La modalidad aún no está lista para asignar Director",
-                            "currentStatus", studentModality.getStatus()
+                            "message", "No se puede asignar un Director de Proyecto en este momento. " +
+                                       "La modalidad debe estar en estado 'Listo para asignar Director' " +
+                                       "(todos los documentos obligatorios aprobados por el Comité de Currículo).",
+                            "currentStatus", studentModality.getStatus().name(),
+                            "requiredStatus", ModalityProcessStatus.READY_FOR_DIRECTOR_ASSIGNMENT.name()
                     )
             );
         }
@@ -4071,6 +5054,8 @@ public class ModalityService {
 
         studentModality.setProjectDirector(director);
         studentModality.setUpdatedAt(LocalDateTime.now());
+        // Cambiar estado a READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE
+        studentModality.setStatus(ModalityProcessStatus.READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE);
         studentModalityRepository.save(studentModality);
 
         String observation =
@@ -4084,7 +5069,7 @@ public class ModalityService {
         historyRepository.save(
                 ModalityProcessStatusHistory.builder()
                         .studentModality(studentModality)
-                        .status(studentModality.getStatus())
+                        .status(ModalityProcessStatus.READY_FOR_APPROVED_BY_PROGRAM_CURRICULUM_COMMITTEE)
                         .changeDate(LocalDateTime.now())
                         .responsible(committeeMember)
                         .observations(observation)
@@ -4706,21 +5691,20 @@ public class ModalityService {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of(
                             "success", false,
-                            "message", "No tiene permiso para asignar jueces en este programa académico"
+                            "message", "No tiene permiso para asignar jurados en este programa académico"
                     ));
         }
 
 
-//        if (studentModality.getStatus() != ModalityProcessStatus.READY_FOR_EXAMINERS ||
-//        studentModality.getStatus() != ModalityProcessStatus.READY_FOR_PROGRAM_CURRICULUM_COMMITTEE) {
-//            return ResponseEntity.badRequest().body(
-//                    Map.of(
-//                            "success", false,
-//                            "message", "La modalidad debe estar en estado 'Listo para jueces' para asignar jueces",
-//                            "currentStatus", studentModality.getStatus()
-//                    )
-//            );
-//        }
+        if (studentModality.getStatus() != ModalityProcessStatus.READY_FOR_EXAMINERS) {
+            return ResponseEntity.badRequest().body(
+                    Map.of(
+                            "success", false,
+                            "message", "La modalidad debe estar en estado 'Listo para jurados' para asignar jurados",
+                            "currentStatus", studentModality.getStatus()
+                    )
+            );
+        }
 
 
         if (request.getPrimaryExaminer1Id() == null &&
@@ -4729,7 +5713,7 @@ public class ModalityService {
             return ResponseEntity.badRequest().body(
                     Map.of(
                             "success", false,
-                            "message", "Debe proporcionar al menos un juez para asignar"
+                            "message", "Debe proporcionar al menos un jurado para asignar"
                     )
             );
         }
@@ -4746,7 +5730,7 @@ public class ModalityService {
             return ResponseEntity.badRequest().body(
                     Map.of(
                             "success", false,
-                            "message", "No se pueden asignar el mismo juez más de una vez"
+                            "message", "No se pueden asignar el mismo jurado más de una vez"
                     )
             );
         }
@@ -4756,7 +5740,7 @@ public class ModalityService {
 
         if (request.getPrimaryExaminer1Id() != null) {
             User examiner1 = userRepository.findById(request.getPrimaryExaminer1Id())
-                    .orElseThrow(() -> new RuntimeException("Juez principal 1 no encontrado"));
+                    .orElseThrow(() -> new RuntimeException("Jurado principal 1 no encontrado"));
 
 
             boolean hasExaminerRole = examiner1.getRoles().stream()
@@ -4766,7 +5750,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El usuario seleccionado como juez principal 1 no tiene el rol EXAMINER"
+                                "message", "El usuario seleccionado como jurado principal 1 no tiene el rol EXAMINER"
                         )
                 );
             }
@@ -4782,7 +5766,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El juez principal 1 no está asociado al programa académico de la modalidad"
+                                "message", "El jurado principal 1 no está asociado al programa académico de la modalidad"
                         )
                 );
             }
@@ -4793,7 +5777,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El director del proyecto no puede ser juez de la misma modalidad"
+                                "message", "El director del proyecto no puede ser jurado de la misma modalidad"
                         )
                 );
             }
@@ -4813,13 +5797,13 @@ public class ModalityService {
                     .build();
 
             defenseExaminerRepository.save(defenseExaminer);
-            examinerAssignmentMessages.add("Juez Principal 1: " + examiner1.getName() + " " + examiner1.getLastName());
+            examinerAssignmentMessages.add("Jurado Principal 1: " + examiner1.getName() + " " + examiner1.getLastName());
         }
 
 
         if (request.getPrimaryExaminer2Id() != null) {
             User examiner2 = userRepository.findById(request.getPrimaryExaminer2Id())
-                    .orElseThrow(() -> new RuntimeException("Juez principal 2 no encontrado"));
+                    .orElseThrow(() -> new RuntimeException("Jurado principal 2 no encontrado"));
 
 
             boolean hasExaminerRole = examiner2.getRoles().stream()
@@ -4829,7 +5813,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El usuario seleccionado como juez principal 2 no tiene el rol EXAMINER"
+                                "message", "El usuario seleccionado como jurado principal 2 no tiene el rol EXAMINER"
                         )
                 );
             }
@@ -4845,7 +5829,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El juez principal 2 no está asociado al programa académico de la modalidad"
+                                "message", "El jurado principal 2 no está asociado al programa académico de la modalidad"
                         )
                 );
             }
@@ -4856,7 +5840,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El director del proyecto no puede ser juez de la misma modalidad"
+                                "message", "El director del proyecto no puede ser jurado de la misma modalidad"
                         )
                 );
             }
@@ -4876,13 +5860,13 @@ public class ModalityService {
                     .build();
 
             defenseExaminerRepository.save(defenseExaminer);
-            examinerAssignmentMessages.add("Juez Principal 2: " + examiner2.getName() + " " + examiner2.getLastName());
+            examinerAssignmentMessages.add("Jurado Principal 2: " + examiner2.getName() + " " + examiner2.getLastName());
         }
 
 
         if (request.getTiebreakerExaminerId() != null) {
             User examiner3 = userRepository.findById(request.getTiebreakerExaminerId())
-                    .orElseThrow(() -> new RuntimeException("Juez de desempate no encontrado"));
+                    .orElseThrow(() -> new RuntimeException("Jurado de desempate no encontrado"));
 
 
             boolean hasExaminerRole = examiner3.getRoles().stream()
@@ -4892,7 +5876,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El usuario seleccionado como juez de desempate no tiene el rol EXAMINER"
+                                "message", "El usuario seleccionado como jurado de desempate no tiene el rol EXAMINER"
                         )
                 );
             }
@@ -4908,7 +5892,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El juez de desempate no está asociado al programa académico de la modalidad"
+                                "message", "El jurado de desempate no está asociado al programa académico de la modalidad"
                         )
                 );
             }
@@ -4919,7 +5903,7 @@ public class ModalityService {
                 return ResponseEntity.badRequest().body(
                         Map.of(
                                 "success", false,
-                                "message", "El director del proyecto no puede ser juez de la misma modalidad"
+                                "message", "El director del proyecto no puede ser jurado de la misma modalidad"
                         )
                 );
             }
@@ -4939,7 +5923,7 @@ public class ModalityService {
                     .build();
 
             defenseExaminerRepository.save(defenseExaminer);
-            examinerAssignmentMessages.add("Juez de Desempate: " + examiner3.getName() + " " + examiner3.getLastName());
+            examinerAssignmentMessages.add("Jurado de Desempate: " + examiner3.getName() + " " + examiner3.getLastName());
         }
 
 
@@ -4948,7 +5932,7 @@ public class ModalityService {
         studentModality.setUpdatedAt(LocalDateTime.now());
         studentModalityRepository.save(studentModality);
 
-        String observationMessage = "Jueces asignados por el comité de currículo:\n" +
+        String observationMessage = "Jurados asignados por el comité de currículo:\n" +
                 String.join("\n", examinerAssignmentMessages);
 
         historyRepository.save(
@@ -4961,7 +5945,7 @@ public class ModalityService {
                         .build()
         );
 
-        // Notificar a los jueces asignados
+        // Notificar a los jurados asignados
         examinerNotificationListener.notifyExaminersAssignment(studentModalityId);
 
         return ResponseEntity.ok(
@@ -4970,7 +5954,7 @@ public class ModalityService {
                         "studentModalityId", studentModalityId,
                         "newStatus", ModalityProcessStatus.EXAMINERS_ASSIGNED,
                         "examinersAssigned", examinerAssignmentMessages,
-                        "message", "Jueces asignados correctamente a la sustentación"
+                        "message", "Jurados asignados correctamente a la sustentación"
                 )
         );
     }
@@ -4994,7 +5978,7 @@ public class ModalityService {
         DefenseExaminer defenseExaminer = defenseExaminerRepository
                 .findByStudentModalityIdAndExaminerId(studentModalityId, examiner.getId())
                 .orElseThrow(() -> new RuntimeException(
-                        "No está asignado como juez de esta sustentación"
+                        "No está asignado como jurado de esta sustentación"
                 ));
 
 
@@ -5070,7 +6054,7 @@ public class ModalityService {
         DefenseExaminer defenseExaminer = defenseExaminerRepository
                 .findByStudentModalityIdAndExaminerId(studentModalityId, examiner.getId())
                 .orElseThrow(() -> new RuntimeException(
-                        "No está asignado como juez de esta sustentación"
+                        "No está asignado como jurado de esta sustentación"
                 ));
 
         ExaminerEvaluation evaluation = examinerEvaluationRepository
@@ -5136,7 +6120,7 @@ public class ModalityService {
                             .status(ModalityProcessStatus.UNDER_EVALUATION_PRIMARY_EXAMINERS)
                             .changeDate(LocalDateTime.now())
                             .responsible(examiner)
-                            .observations("Juez " + examiner.getName() + " ha registrado su evaluación. " +
+                            .observations("Jurado " + examiner.getName() + " ha registrado su evaluación. " +
                                     "Calificación: " + currentEvaluation.getGrade() +
                                     ". Decisión: " + currentEvaluation.getDecision())
                             .build()
@@ -5145,7 +6129,7 @@ public class ModalityService {
             return ResponseEntity.ok(
                     Map.of(
                             "success", true,
-                            "message", "Evaluación registrada correctamente. Esperando evaluación del otro juez principal.",
+                            "message", "Evaluación registrada correctamente. Esperando evaluación del otro jurado principal.",
                             "grade", currentEvaluation.getGrade(),
                             "decision", currentEvaluation.getDecision()
                     )
@@ -5212,7 +6196,7 @@ public class ModalityService {
 
 
         String observations = String.format(
-                "CONSENSO entre jueces principales. Calificación final: %.2f. " +
+                "CONSENSO entre jurados principales. Calificación final: %.2f. " +
                 "Decisión: %s. Distinción: %s",
                 averageGrade, consensusDecision, distinction
         );
@@ -5246,8 +6230,8 @@ public class ModalityService {
                         "academicDistinction", distinction,
                         "finalGrade", averageGrade,
                         "message", finalStatus == ModalityProcessStatus.GRADED_APPROVED
-                                ? "Modalidad APROBADA por consenso de los jueces"
-                                : "Modalidad REPROBADA por consenso de los jueces"
+                                ? "Modalidad APROBADA por consenso de los jurados"
+                                : "Modalidad REPROBADA por consenso de los jurados"
                 )
         );
     }
@@ -5265,8 +6249,8 @@ public class ModalityService {
 
 
         String observations = String.format(
-                "DESACUERDO entre jueces principales. Juez 1: %s (%.2f). Juez 2: %s (%.2f). " +
-                "Se requiere asignar un tercer juez para desempatar.",
+                "DESACUERDO entre jurados principales. Jurado 1: %s (%.2f). Jurado 2: %s (%.2f). " +
+                "Se requiere asignar un tercer jurado para desempatar.",
                 primaryEvaluations.get(0).getDecision(), primaryEvaluations.get(0).getGrade(),
                 primaryEvaluations.get(1).getDecision(), primaryEvaluations.get(1).getGrade()
         );
@@ -5287,7 +6271,7 @@ public class ModalityService {
                         "hasConsensus", false,
                         "requiresTiebreaker", true,
                         "status", ModalityProcessStatus.DISAGREEMENT_REQUIRES_TIEBREAKER,
-                        "message", "No hay consenso entre los jueces principales. Se requiere asignar un tercer juez para desempatar."
+                        "message", "No hay consenso entre los jurados principales. Se requiere asignar un tercer jurado para desempatar."
                 )
         );
     }
@@ -5329,7 +6313,7 @@ public class ModalityService {
 
 
         String observations = String.format(
-                "DESEMPATE resuelto por tercer juez. Calificación final: %.2f. " +
+                "DESEMPATE resuelto por tercer jurado. Calificación final: %.2f. " +
                 "Decisión: %s. Distinción: %s",
                 tiebreakerEvaluation.getGrade(), tiebreakerDecision, distinction
         );
@@ -5363,8 +6347,8 @@ public class ModalityService {
                         "academicDistinction", distinction,
                         "finalGrade", tiebreakerEvaluation.getGrade(),
                         "message", finalStatus == ModalityProcessStatus.GRADED_APPROVED
-                                ? "Modalidad APROBADA por decisión del juez de desempate"
-                                : "Modalidad REPROBADA por decisión del juez de desempate"
+                                ? "Modalidad APROBADA por decisión del jurado de desempate"
+                                : "Modalidad REPROBADA por decisión del jurado de desempate"
                 )
         );
     }
@@ -5965,26 +6949,48 @@ public class ModalityService {
         ModalityProcessStatus newModalityStatus = null;
         DocumentStatus newDocumentStatus = null;
 
-        if (studentModality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED) {
+        ModalityProcessStatus currentStatus = studentModality.getStatus();
+        boolean isCorrectionsSubmitted =
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED ||
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD ||
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE ||
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS;
+
+        if (isCorrectionsSubmitted) {
 
             if (document.getStatus() == DocumentStatus.CORRECTION_RESUBMITTED) {
 
-                List<StudentDocumentStatusHistory> history =
-                        documentHistoryRepository.findByStudentDocumentIdOrderByChangeDateDesc(documentId);
+                if (currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD ||
+                    currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED) {
+                    // Verificar si fue solicitado por program head mediante historial
+                    List<StudentDocumentStatusHistory> history =
+                            documentHistoryRepository.findByStudentDocumentIdOrderByChangeDateDesc(documentId);
+                    boolean wasRequestedByProgramHead = history.stream()
+                            .anyMatch(h -> h.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD);
 
-                boolean wasRequestedByProgramHead = history.stream()
-                        .anyMatch(h -> h.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD);
-
-                if (wasRequestedByProgramHead) {
-                    authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
-                            reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_HEAD);
-                    newModalityStatus = ModalityProcessStatus.CORRECTIONS_APPROVED;
-                    newDocumentStatus = DocumentStatus.ACCEPTED_FOR_PROGRAM_HEAD_REVIEW;
-                } else {
+                    if (wasRequestedByProgramHead || currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD) {
+                        authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
+                                reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_HEAD);
+                        newModalityStatus = ModalityProcessStatus.CORRECTIONS_APPROVED;
+                        newDocumentStatus = DocumentStatus.ACCEPTED_FOR_PROGRAM_HEAD_REVIEW;
+                    } else {
+                        authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
+                                reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_CURRICULUM_COMMITTEE);
+                        newModalityStatus = ModalityProcessStatus.CORRECTIONS_APPROVED;
+                        newDocumentStatus = DocumentStatus.ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW;
+                    }
+                } else if (currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE) {
                     authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
                             reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_CURRICULUM_COMMITTEE);
                     newModalityStatus = ModalityProcessStatus.CORRECTIONS_APPROVED;
                     newDocumentStatus = DocumentStatus.ACCEPTED_FOR_PROGRAM_CURRICULUM_COMMITTEE_REVIEW;
+                } else if (currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS) {
+                    // Verificar que el revisor es un jurado asignado a esta modalidad
+                    authorized = defenseExaminerRepository
+                            .findByStudentModalityIdAndExaminerId(studentModality.getId(), reviewer.getId())
+                            .isPresent();
+                    newModalityStatus = ModalityProcessStatus.CORRECTIONS_APPROVED;
+                    newDocumentStatus = DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW;
                 }
             }
         }
@@ -6082,19 +7088,37 @@ public class ModalityService {
 
 
         boolean authorized = false;
-        if (studentModality.getStatus() == ModalityProcessStatus.CORRECTIONS_SUBMITTED) {
-            List<StudentDocumentStatusHistory> history =
-                    documentHistoryRepository.findByStudentDocumentIdOrderByChangeDateDesc(documentId);
+        ModalityProcessStatus currentStatus = studentModality.getStatus();
+        boolean isCorrectionsSubmitted =
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED ||
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD ||
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE ||
+                currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS;
 
-            boolean wasRequestedByProgramHead = history.stream()
-                    .anyMatch(h -> h.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD);
-
-            if (wasRequestedByProgramHead) {
+        if (isCorrectionsSubmitted) {
+            if (currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_PROGRAM_HEAD) {
                 authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
                         reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_HEAD);
-            } else {
+            } else if (currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_COMMITTEE) {
                 authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
                         reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_CURRICULUM_COMMITTEE);
+            } else if (currentStatus == ModalityProcessStatus.CORRECTIONS_SUBMITTED_TO_EXAMINERS) {
+                authorized = defenseExaminerRepository
+                        .findByStudentModalityIdAndExaminerId(studentModality.getId(), reviewer.getId())
+                        .isPresent();
+            } else {
+                // CORRECTIONS_SUBMITTED genérico: verificar por historial
+                List<StudentDocumentStatusHistory> history =
+                        documentHistoryRepository.findByStudentDocumentIdOrderByChangeDateDesc(documentId);
+                boolean wasRequestedByProgramHead = history.stream()
+                        .anyMatch(h -> h.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_HEAD);
+                if (wasRequestedByProgramHead) {
+                    authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
+                            reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_HEAD);
+                } else {
+                    authorized = programAuthorityRepository.existsByUser_IdAndAcademicProgram_IdAndRole(
+                            reviewer.getId(), academicProgramId, ProgramRole.PROGRAM_CURRICULUM_COMMITTEE);
+                }
             }
         }
 
@@ -7692,7 +8716,7 @@ public class ModalityService {
                         "success", true,
                         "studentModalityId", studentModalityId,
                         "newStatus", ModalityProcessStatus.READY_FOR_DEFENSE,
-                        "message", "Modalidad marcada como lista para defensa y jueces notificados"
+                        "message", "Modalidad marcada como lista para defensa y jurados notificados"
                 )
         );
     }
@@ -7774,7 +8798,7 @@ public class ModalityService {
             return ResponseEntity.badRequest().body(
                     Map.of(
                             "success", false,
-                            "message", "Para finalizar la revisión, todos los documentos obligatorios deben estar aceptados por los jueces",
+                            "message", "Para finalizar la revisión, todos los documentos obligatorios deben estar aceptados por los jurados",
                             "documents", invalidDocuments
                     )
             );
