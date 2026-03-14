@@ -46,6 +46,14 @@ public class StudentController {
         return studentService.updateStudentProfile(request);
     }
 
+    @PostMapping("/profile/from-academic-history")
+    @PreAuthorize("hasRole('STUDENT')")
+    public ResponseEntity<?> updateStudentProfileFromAcademicHistory(
+            @RequestParam("file") MultipartFile file
+    ) {
+        return studentService.updateStudentProfileFromAcademicHistory(file);
+    }
+
     @GetMapping("/profile")
     @PreAuthorize("hasRole('STUDENT')")
     public ResponseEntity<?> getStudentInfo() {

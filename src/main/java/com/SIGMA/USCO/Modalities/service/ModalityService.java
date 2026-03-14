@@ -31,6 +31,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.UrlResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -82,6 +83,7 @@ public class ModalityService {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final DocumentEditRequestRepository documentEditRequestRepository;
     private final DocumentEditRequestVoteRepository documentEditRequestVoteRepository;
+    private final AcademicHistoryPdfRepository academicHistoryPdfRepository;
 
 
     @Value("${file.upload-dir}")
@@ -11604,6 +11606,64 @@ public class ModalityService {
                     "success", false,
                     "message", "Error al obtener los estudiantes: " + e.getMessage()
             ));
+        }
+    }
+
+    /**
+     * Obtiene los PDFs de historial académico de todos los estudiantes
+     * asociados a una modalidad específica
+     * @param modalityId ID de la modalidad
+     * @return Lista de AcademicHistoryPdf de los estudiantes en la modalidad
+     */
+    public List<AcademicHistoryPdf> getAcademicHistoryPdfsByModality(Long modalityId) {
+        log.info("Obteniendo PDFs de historial académico para la modalidad: {}", modalityId);
+        try {
+            return academicHistoryPdfRepository.findByStudentModalityId(modalityId);
+        } catch (Exception e) {
+            log.error("Error al obtener PDFs de historial académico: {}", e.getMessage(), e);
+            throw new RuntimeException("Error al obtener los PDFs de historial académico: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Descarga/visualiza un PDF de historial académico específico
+     * @param academicHistoryPdfId ID del documento PDF
+     * @return ResponseEntity con el archivo PDF para descargar o visualizar
+     */
+    public ResponseEntity<?> downloadAcademicHistoryPdf(Long academicHistoryPdfId) throws MalformedURLException {
+        log.info("Descargando PDF de historial académico: {}", academicHistoryPdfId);
+        
+        AcademicHistoryPdf pdf = academicHistoryPdfRepository.findById(academicHistoryPdfId)
+                .orElseThrow(() -> new RuntimeException("PDF de historial académico no encontrado con ID: " + academicHistoryPdfId));
+        
+        Path filePath = Paths.get(pdf.getFilePath());
+        
+        if (!Files.exists(filePath)) {
+            log.error("Archivo PDF no existe en la ruta: {}", pdf.getFilePath());
+            throw new RuntimeException("Archivo PDF no encontrado en el servidor: " + pdf.getOriginalFileName());
+        }
+        
+        try {
+            Resource resource = new UrlResource(filePath.toUri());
+            
+            if (!resource.exists()) {
+                throw new RuntimeException("No se puede acceder al archivo PDF");
+            }
+            
+            String contentType = "application/pdf";
+            
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(contentType))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, 
+                            "inline; filename=\"" + pdf.getOriginalFileName() + "\"")
+                    .body(resource);
+                    
+        } catch (MalformedURLException e) {
+            log.error("Error al crear URL del recurso: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Error al descargar PDF: {}", e.getMessage(), e);
+            throw new RuntimeException("Error al descargar el archivo PDF: " + e.getMessage());
         }
     }
 

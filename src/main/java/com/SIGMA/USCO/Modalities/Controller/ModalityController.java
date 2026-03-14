@@ -11,6 +11,7 @@ import com.SIGMA.USCO.Modalities.dto.response.ProjectDirectorResponse;
 import com.SIGMA.USCO.Modalities.service.ModalityService;
 import com.SIGMA.USCO.Users.Entity.User;
 import com.SIGMA.USCO.Users.Entity.enums.ProgramRole;
+import com.SIGMA.USCO.academic.entity.AcademicHistoryPdf;
 import com.SIGMA.USCO.academic.entity.AcademicProgram;
 import com.SIGMA.USCO.academic.entity.StudentProfile;
 import com.SIGMA.USCO.documents.dto.DetailDocumentDTO;
@@ -35,6 +36,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -777,6 +779,83 @@ public class ModalityController {
             @RequestBody Map<String, String> body) {
         String reason = body != null ? body.get("reason") : null;
         return modalityService.rejectDistinctionProposal(studentModalityId, reason);
+    }
+
+    /**
+     * Obtiene los PDFs de historial académico de todos los estudiantes
+     * asociados a una modalidad específica.
+     * 
+     * Solo pueden acceder roles: EXAMINERS, PROGRAM_HEAD, DIRECTOR, COMITE
+     * 
+     * GET /modalities/{modalityId}/academic-history-pdfs
+     * 
+     * @param modalityId ID de la modalidad
+     * @return Lista de PDFs de historial académico de los estudiantes
+     */
+    @GetMapping("/{modalityId}/academic-history-pdfs")
+    @PreAuthorize("hasAnyRole('EXAMINERS', 'PROGRAM_HEAD', 'DIRECTOR', 'COMITE')")
+    public ResponseEntity<?> getAcademicHistoryPdfsByModality(@PathVariable Long modalityId) {
+        try {
+            List<AcademicHistoryPdf> pdfs = modalityService.getAcademicHistoryPdfsByModality(modalityId);
+            
+            if (pdfs.isEmpty()) {
+                return ResponseEntity.ok(Map.of(
+                        "success", true,
+                        "message", "No hay PDFs de historial académico para esta modalidad",
+                        "data", pdfs
+                ));
+            }
+            
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "PDFs obtenidos correctamente",
+                    "count", pdfs.size(),
+                    "data", pdfs
+            ));
+        } catch (RuntimeException e) {
+            log.error("Error al obtener PDFs de historial académico: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "success", false,
+                    "message", e.getMessage()
+            ));
+        } catch (Exception e) {
+            log.error("Error inesperado al obtener PDFs de historial académico: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "success", false,
+                    "message", "Error al obtener los PDFs de historial académico"
+            ));
+        }
+    }
+
+    /**
+     * Descarga/visualiza el PDF de historial académico de un estudiante específico.
+     * 
+     * Permite descargar o visualizar en el navegador el PDF mediante su ID de documento.
+     * Solo pueden acceder roles: EXAMINERS, PROGRAM_HEAD, DIRECTOR, COMITE
+     * 
+     * GET /modalities/academic-history-pdfs/{academicHistoryPdfId}/download
+     * 
+     * @param academicHistoryPdfId ID del documento de historial académico
+     * @return El archivo PDF para descargar/visualizar
+     */
+    @GetMapping("/academic-history-pdfs/{academicHistoryPdfId}/download")
+    @PreAuthorize("hasAnyRole('EXAMINERS', 'PROGRAM_HEAD', 'DIRECTOR', 'COMITE')")
+    public ResponseEntity<?> downloadAcademicHistoryPdf(@PathVariable Long academicHistoryPdfId) {
+        try {
+            return modalityService.downloadAcademicHistoryPdf(academicHistoryPdfId);
+        } catch (MalformedURLException e) {
+            log.error("Error de URL al descargar PDF: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                    "success", false,
+                    "message", "Error en la ruta del archivo: " + e.getMessage()
+            ));
+        } catch (Exception e) {
+            log.error("Error al descargar PDF de historial académico: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "success", false,
+                    "message", "Error al descargar el archivo PDF: " + e.getMessage()
+            ));
+        }
     }
 
 }
