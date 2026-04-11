@@ -142,6 +142,17 @@ public class StudentNotificationListener {
         String subject = "Correcciones solicitadas en documento académico – Acción requerida";
         for (var member : members) {
             User student = member.getStudent();
+            
+            // Determinar quién solicita las correcciones
+            String requestedByText;
+            if (event.getRequestedBy() == NotificationRecipientType.PROGRAM_HEAD) {
+                requestedByText = "la Jefatura de Programa y/o Coordinación de Modalidades";
+            } else if (event.getRequestedBy() == NotificationRecipientType.EXAMINER) {
+                requestedByText = "un jurado evaluador";
+            } else {
+                requestedByText = "el Comité de Currículo del Programa";
+            }
+            
             String message = """
         Estimado/a %s,
 
@@ -176,9 +187,7 @@ public class StudentNotificationListener {
         Sistema de Gestión Académica
         """.formatted(
             student.getName(),
-            event.getRequestedBy() == NotificationRecipientType.PROGRAM_HEAD
-                ? "la Jefatura de Programa y/o Coordinación de Modalidades"
-                : "el Comité de Currículo del Programa",
+            requestedByText,
             document.getDocumentConfig().getDocumentName(),
             event.getObservations() != null && !event.getObservations().isBlank()
                 ? event.getObservations()
@@ -1163,9 +1172,10 @@ public class StudentNotificationListener {
             Reciba un cordial saludo.
 
             Por medio de la presente se le informa que, tras la evaluación
-            realizada por el jurado designado, las correcciones remitidas
-            no fueron aprobadas, razón por la cual se procede a la
-            CANCELACIÓN DEFINITIVA de la siguiente modalidad de grado:
+            realizada por el jurado designado,uno o más documentos han sido
+            rechazados y/o las correcciones remitidas no fueron aprobadas, 
+            razón por la cual se procede a la CANCELACIÓN DEFINITIVA de 
+            la siguiente modalidad de grado:
 
             ───────────────────────────────
             "%s"

@@ -41,6 +41,11 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -49,30 +54,33 @@ import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
 
+@Tag(name = "Reportes", description = "Generación de reportes institucionales: modalidades, estudiantes, directores, análisis histórico, trazabilidad y calendarios")
 @RestController
 @RequestMapping("/reports")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*")
+@SecurityRequirement(name = "bearer-jwt")
 public class GlobalModalityReportController {
 
     private final ReportService reportService;
     private final StudentReportService studentReportService;
     private final DirectorReportService directorReportService;
+    private final ModalityTraceabilityReportService modalityTraceabilityReportService;
+    private final DefenseCalendarReportService defenseCalendarReportService;
     private final PdfReport pdfGeneratorService;
-    private final ModalityComparisonPdfGenerator comparisonPdfGenerator;
     private final DirectorAssignedModalitiesPdfGenerator directorPdfGenerator;
+    private final ModalityComparisonPdfGenerator comparisonPdfGenerator;
     private final ModalityHistoricalPdfGenerator modalityHistoricalPdfGenerator;
     private final StudentListingPdfGenerator studentListingPdfGenerator;
     private final CompletedModalitiesPdfGenerator completedModalitiesPdfGenerator;
-    private final DefenseCalendarReportService defenseCalendarReportService;
-    private final DefenseCalendarPdfGenerator defenseCalendarPdfGenerator;
-    private final ModalityTraceabilityReportService modalityTraceabilityReportService;
     private final ModalityTraceabilityPdfGenerator modalityTraceabilityPdfGenerator;
-
+    private final DefenseCalendarPdfGenerator defenseCalendarPdfGenerator;
 
     @GetMapping("/global/modalities")
     @PreAuthorize("hasAuthority('PERM_VIEW_REPORT')")
-    public ResponseEntity<?> getGlobalModalityReport() {
+    @Operation(summary = "Obtener reporte global de modalidades", description = "Retorna el reporte completo de todas las modalidades activas en el sistema con estadísticas y análisis.")
+    @ApiResponse(responseCode = "200", description = "Reporte global generado exitosamente")
+    public ResponseEntity<?> getGlobalModalitiesReport() {
         try {
             GlobalModalityReportDTO report = reportService.generateGlobalReport();
 
@@ -99,6 +107,12 @@ public class GlobalModalityReportController {
 
     @GetMapping("/global/modalities/pdf")
     @PreAuthorize("hasAuthority('PERM_VIEW_REPORT')")
+    @Operation(summary = "Descargar reporte global en PDF", description = "Exporta el reporte global de modalidades en formato PDF. Incluye toda la información del reporte JSON en un documento profesional descargable.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "PDF generado exitosamente y descargable"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado: necesita PERM_VIEW_REPORT"),
+            @ApiResponse(responseCode = "500", description = "Error al generar el PDF")
+    })
     public ResponseEntity<Resource> exportGlobalModalityReportToPDF() {
         try {
             GlobalModalityReportDTO report = reportService.generateGlobalReport();
@@ -118,9 +132,15 @@ public class GlobalModalityReportController {
 
 
 
+
     @GetMapping("/students/by-modality")
     @PreAuthorize("hasAuthority('PERM_VIEW_REPORT')")
     public ResponseEntity<?> getStudentsByModalityReport(@RequestParam String modalityType) {
+        // ========================================
+        // SECCIÓN 3: REPORTES DE ESTUDIANTES
+        // ========================================
+        // Análisis de estudiantes por tipo de modalidad
+        // Incluye: distribución, estados, avances y estadísticas por modalidad
         try {
             StudentsByModalityReportDTO report = studentReportService
                     .generateStudentsByModalityReport(modalityType);
@@ -355,7 +375,9 @@ public class GlobalModalityReportController {
 
     @GetMapping("/available")
     @PreAuthorize("hasAuthority('PERM_VIEW_REPORT')")
-    public ResponseEntity<?> getAvailableReports() {
+    @Operation(summary = "Catálogo de reportes disponibles", description = "Retorna un listado completo con todos los reportes disponibles en el sistema. Incluye: tipos de reporte, formatos soportados (JSON/PDF), rutas de acceso y descripción de cada uno.")
+    @ApiResponse(responseCode = "200", description = "Catálogo de reportes obtenido exitosamente")
+    public ResponseEntity<?> getAvailableReportsCatalog() {
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "availableReports", Map.of(
@@ -773,6 +795,7 @@ public class GlobalModalityReportController {
     }
 
     // ==================== MÉTODOS HELPER ====================
+    // Funciones auxiliares para construir respuestas estandarizadas y generar nombres de archivo
 
     private Map<String, Object> buildReportInfo(
             ReportType reportType,
@@ -780,6 +803,8 @@ public class GlobalModalityReportController {
             String[] formats,
             Map<String, String> endpoints
     ) {
+        // Construye información metadatos sobre un reporte específico
+        // Retorna: nombre, descripción, RF (requisito funcional), formatos disponibles, endpoints y actores
         return Map.of(
                 "name", reportType.getDisplayName(),
                 "description", description,
@@ -803,6 +828,8 @@ public class GlobalModalityReportController {
     }
 
     // ==================== REPORTE DE TRAZABILIDAD DE MODALIDAD ====================
+    // Permite seguimiento completo del estado de cada modalidad en tiempo real
+    // Incluye: historial de cambios, documentos, evaluaciones, aprobaciones y alertas
 
     /**
      * Endpoint JSON: trazabilidad completa de una modalidad por su ID directo.

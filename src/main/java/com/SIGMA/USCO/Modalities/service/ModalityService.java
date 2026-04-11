@@ -418,11 +418,13 @@ public class ModalityService {
 
 
         // Verificar si el estudiante tiene modalidades activas (en proceso)
+        // CORRECTIONS_REJECTED_FINAL también es un estado finalizado que permite iniciar nueva modalidad
 
         List<ModalityProcessStatus> finalizedStatuses = List.of(
                 ModalityProcessStatus.MODALITY_CLOSED,
                 ModalityProcessStatus.MODALITY_CANCELLED,
-                ModalityProcessStatus.GRADED_FAILED
+                ModalityProcessStatus.GRADED_FAILED,
+                ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL
         );
 
         // Obtener todas las modalidades del estudiante como miembro activo
@@ -1181,6 +1183,17 @@ public class ModalityService {
             );
         }
 
+        if (document.getStatus() == DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW){
+            return ResponseEntity.badRequest().body(
+                    Map.of(
+                            "success", false,
+                            "message", "No se puede cambiar el estado del documento porque ya fue aceptado por los jurados evaluadores."
+                    )
+            );
+        }
+
+
+
 
         if (document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_PROGRAM_CURRICULUM_COMMITTEE ||
            document.getStatus() == DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER){
@@ -1764,7 +1777,7 @@ public class ModalityService {
     }
 
     @Transactional
-    public ResponseEntity<?> reviewFinalDocumentByExaminer(Long studentDocumentId, DocumentReviewDTO request) {
+        public ResponseEntity<?> reviewFinalDocumentByExaminer(Long studentDocumentId, DocumentReviewDTO request) {
 
         if (request == null || request.getFinalEvaluation() == null) {
             return ResponseEntity.badRequest().body(Map.of(
@@ -2347,8 +2360,13 @@ public class ModalityService {
      */
     private ResponseEntity<?> applyCorrectionsRequestedByPrimaryExaminers(StudentDocument document, StudentModality studentModality, User examiner, List<ExaminerDocumentReview> reviews, String notes) {
 
+        // ===== LÓGICA DE CONTADOR DE INTENTOS =====
+        // Solo incrementar el contador si la modalidad NO está ya en estado CORRECTIONS_REQUESTED_EXAMINERS
+        // Esto evita que si ambos jurados solicitan correcciones, se cuente como 2 intentos en lugar de 1
+        boolean shouldIncrementAttempt = studentModality.getStatus() != ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS;
+        
         int currentAttempts = studentModality.getCorrectionAttempts() == null ? 0 : studentModality.getCorrectionAttempts();
-        int newAttempts = currentAttempts + 1;
+        int newAttempts = shouldIncrementAttempt ? currentAttempts + 1 : currentAttempts;
 
         if (newAttempts > 3) {
             studentModality.setStatus(ModalityProcessStatus.CORRECTIONS_REJECTED_FINAL);
@@ -2403,12 +2421,17 @@ public class ModalityService {
         studentModality.setUpdatedAt(now);
         studentModalityRepository.save(studentModality);
 
+        // Trazabilidad: indicar si este es un nuevo intento o una solicitud adicional del mismo intento
+        String attemptMessage = shouldIncrementAttempt
+                ? "Jurados solicitaron correcciones (intento " + newAttempts + " de 3): " + combinedNotes
+                : "Jurado adicional solicitó correcciones para el intento " + newAttempts + " (ya en proceso): " + combinedNotes;
+
         historyRepository.save(ModalityProcessStatusHistory.builder()
                 .studentModality(studentModality)
                 .status(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS)
                 .changeDate(now)
                 .responsible(examiner)
-                .observations("Jurados solicitaron correcciones (intento " + newAttempts + " de 3): " + combinedNotes)
+                .observations(attemptMessage)
                 .build());
 
         List<StudentModalityMember> activeMembers = studentModalityMemberRepository
@@ -2416,7 +2439,7 @@ public class ModalityService {
         for (StudentModalityMember member : activeMembers) {
             notificationEventPublisher.publish(new DocumentCorrectionsRequestedEvent(
                     document.getId(), member.getStudent().getId(),
-                    combinedNotes, NotificationRecipientType.PROGRAM_CURRICULUM_COMMITTEE, examiner.getId()
+                    combinedNotes, NotificationRecipientType.EXAMINER, examiner.getId()
             ));
         }
         return null;
@@ -2504,8 +2527,14 @@ public class ModalityService {
      */
     private void applyCorrectionsRequestedFromTiebreaker(StudentDocument document, StudentModality studentModality, User tiebreaker, String notes) {
 
+        // ===== LÓGICA DE CONTADOR DE INTENTOS =====
+        // Solo incrementar el contador si la modalidad NO está ya en estado CORRECTIONS_REQUESTED_EXAMINERS
+        // Esto evita que si el jurado de desempate solicita correcciones en paralelo con jurados primarios,
+        // se cuente como 2 intentos en lugar de 1
+        boolean shouldIncrementAttempt = studentModality.getStatus() != ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS;
+        
         int currentAttempts = studentModality.getCorrectionAttempts() == null ? 0 : studentModality.getCorrectionAttempts();
-        int newAttempts = currentAttempts + 1;
+        int newAttempts = shouldIncrementAttempt ? currentAttempts + 1 : currentAttempts;
 
         document.setStatus(DocumentStatus.CORRECTIONS_REQUESTED_BY_EXAMINER);
         document.setNotes(notes);
@@ -2520,12 +2549,17 @@ public class ModalityService {
         studentModality.setUpdatedAt(now);
         studentModalityRepository.save(studentModality);
 
+        // Trazabilidad: indicar si este es un nuevo intento o una solicitud adicional del mismo intento
+        String attemptMessage = shouldIncrementAttempt
+                ? "Jurado de desempate solicitó correcciones (intento " + newAttempts + " de 3): " + notes
+                : "Jurado de desempate solicitó correcciones para el intento " + newAttempts + " (ya en proceso): " + notes;
+
         historyRepository.save(ModalityProcessStatusHistory.builder()
                 .studentModality(studentModality)
                 .status(ModalityProcessStatus.CORRECTIONS_REQUESTED_EXAMINERS)
                 .changeDate(now)
                 .responsible(tiebreaker)
-                .observations("Jurado de desempate solicitó correcciones: " + notes)
+                .observations(attemptMessage)
                 .build());
 
         List<StudentModalityMember> activeMembers = studentModalityMemberRepository
@@ -2533,7 +2567,7 @@ public class ModalityService {
         for (StudentModalityMember member : activeMembers) {
             notificationEventPublisher.publish(new DocumentCorrectionsRequestedEvent(
                     document.getId(), member.getStudent().getId(),
-                    notes, NotificationRecipientType.PROGRAM_CURRICULUM_COMMITTEE, tiebreaker.getId()
+                    notes, NotificationRecipientType.EXAMINER, tiebreaker.getId()
             ));
         }
     }
@@ -2975,6 +3009,15 @@ public class ModalityService {
                 Map.of(
                     "success", false,
                     "message", "No se puede cambiar el estado del documento porque está en estado " + document.getStatus() + ". El estudiante debe primero corregir y resubir el documento para que pueda ser revisado por el comité de currículo de programa."
+                )
+            );
+        }
+
+        if ( document.getStatus() == DocumentStatus.ACCEPTED_FOR_EXAMINER_REVIEW){
+            return ResponseEntity.badRequest().body(
+                Map.of(
+                    "success", false,
+                    "message", "No se puede cambiar el estado del documento porque ya fue aprobado por los jurados. El comité de currículo de programa solo puede revisar documentos que aún no han sido aprobados por los jurados."
                 )
             );
         }
@@ -3423,7 +3466,7 @@ public class ModalityService {
             case CORRECTIONS_APPROVED ->
                     "Las correcciones enviadas han sido aprobadas por la jefatura del programa. El proceso continúa con la siguiente etapa.";
             case CORRECTIONS_REJECTED_FINAL ->
-                    "Las correcciones enviadas no fueron aprobadas y agotaste el límite de intentos (3). El proceso ha sido cerrado o cancelado.";
+                    "Uno o más documentos no fueron aprobados y/o agotaste el límite de intentos (3). El proceso ha sido cerrado o cancelado.";
             case READY_FOR_PROGRAM_CURRICULUM_COMMITTEE ->
                     "La jefatura de programa y/o cordinación de modalidades aprobó la modalidad de grado. Está pendiente de revisión por el comité de currículo de programa.";
             case UNDER_REVIEW_PROGRAM_CURRICULUM_COMMITTEE ->
@@ -4882,7 +4925,9 @@ public class ModalityService {
                                 .observations(h.getObservations())
                                 .build()
                         )
+                        .sorted((h1, h2) -> h2.getChangeDate().compareTo(h1.getChangeDate())) // Ordenar de más reciente a más antiguo
                         .toList();
+
 
         // Documentos requeridos y cargados
         // Para la vista del examinador, solo se muestran documentos (MANDATORY o SECONDARY) que requieren evaluación de propuesta
@@ -6802,17 +6847,7 @@ public class ModalityService {
 
         if (!bothEvaluated) {
 
-            historyRepository.save(
-                    ModalityProcessStatusHistory.builder()
-                            .studentModality(studentModality)
-                            .status(ModalityProcessStatus.UNDER_EVALUATION_PRIMARY_EXAMINERS)
-                            .changeDate(LocalDateTime.now())
-                            .responsible(examiner)
-                            .observations("Jurado " + examiner.getName() + " ha registrado su evaluación. " +
-                                    "Calificación: " + currentEvaluation.getGrade() +
-                                    ". Resultado: " + (currentEvaluation.getGrade() >= 3.5 ? "APROBADO" : "REPROBADO"))
-                            .build()
-            );
+
 
             return ResponseEntity.ok(
                     Map.of(
@@ -6904,7 +6939,7 @@ public class ModalityService {
                     "Resultado: APROBADO. Los jurados proponen la distinción: %s. " +
                     "PENDIENTE DE REVISIÓN por el Comité de Currículo. Argumentos: %s",
                     averageGrade,
-                    distinction.name(),
+                    translateAcademicDistinction(distinction),
                     mentionNotes.isBlank() ? "Sin argumentos adicionales" : mentionNotes
             );
         } else {
@@ -6913,7 +6948,7 @@ public class ModalityService {
                     "Resultado: %s. Distinción: %s",
                     averageGrade,
                     approved ? "APROBADO" : "REPROBADO",
-                    distinction
+                    translateAcademicDistinction(distinction)
             );
         }
 
@@ -6941,21 +6976,21 @@ public class ModalityService {
 
         String message;
         if (pendingDistinctionReview) {
-            message = "Modalidad APROBADA por consenso de los jurados. Los jurados han PROPUESTO una distinción honorífica (" +
-                    distinction.name() + "). El Comité de Currículo debe revisar y decidir si acepta o rechaza la distinción.";
+            message = "¡Felicitaciones! Tu modalidad de grado ha sido aprobada por consenso de los jurados. Los jurados han propuesto una distinción honorífica (" +
+                    translateAcademicDistinction(distinction) + "). El Comité de Currículo debe revisar y decidir si acepta o rechaza la distinción.";
         } else {
-            message = approved ? "Modalidad APROBADA por consenso de los jurados" : "Modalidad REPROBADA por consenso de los jurados";
+            message = approved ? "¡Felicitaciones! Tu modalidad de grado ha sido aprobada por consenso de los jurados." : "Tu modalidad de grado ha sido reprobada por consenso de los jurados.";
         }
 
         return ResponseEntity.ok(
                 Map.of(
-                        "success", true,
-                        "hasConsensus", true,
-                        "finalStatus", finalStatus,
-                        "academicDistinction", distinction,
-                        "finalGrade", averageGrade,
-                        "pendingDistinctionReview", pendingDistinctionReview,
-                        "message", message
+                        "exito", true,
+                        "consenso", true,
+                        "estadoFinal", finalStatus.name(),
+                        "distincionAcademica", translateAcademicDistinction(distinction),
+                        "calificacionFinal", averageGrade,
+                        "distincionPendienteRevision", pendingDistinctionReview,
+                        "mensaje", message
                 )
         );
     }
@@ -7051,7 +7086,7 @@ public class ModalityService {
                     "Resultado: APROBADO. El jurado de desempate propone la distinción: %s. " +
                     "PENDIENTE DE REVISIÓN por el Comité de Currículo. Argumento: %s",
                     tiebreakerGrade,
-                    distinction.name(),
+                    translateProposedDistinction(distinction),
                     mentionNote
             );
         } else {
@@ -7060,7 +7095,7 @@ public class ModalityService {
                     "Resultado: %s. Distinción: %s",
                     tiebreakerGrade,
                     approved ? "APROBADO" : "REPROBADO",
-                    distinction
+                    translateProposedDistinction(distinction)
             );
         }
 
@@ -7088,7 +7123,7 @@ public class ModalityService {
         String message;
         if (pendingDistinctionReview) {
             message = "Modalidad APROBADA por decisión del jurado de desempate. El jurado ha PROPUESTO la distinción (" +
-                    distinction.name() + "). El Comité de Currículo debe revisar y decidir si acepta o rechaza la distinción.";
+                    translateProposedDistinction(distinction) + "). El Comité de Currículo debe revisar y decidir si acepta o rechaza la distinción.";
         } else {
             message = approved ? "Modalidad APROBADA por decisión del jurado de desempate"
                     : "Modalidad REPROBADA por decisión del jurado de desempate";
@@ -7549,8 +7584,8 @@ public class ModalityService {
         String observations = String.format(
                 "El Comité de Currículo ACEPTÓ la distinción honorífica propuesta por los jurados. " +
                 "Distinción propuesta: %s → Distinción confirmada: %s. %s",
-                proposedDistinction.name(),
-                confirmedDistinction.name(),
+                translateAcademicDistinction(proposedDistinction),
+                translateAcademicDistinction(confirmedDistinction),
                 notes != null && !notes.isBlank() ? "Observaciones del comité: " + notes : ""
         );
 
@@ -7639,8 +7674,8 @@ public class ModalityService {
                 "El Comité de Currículo RECHAZÓ la distinción honorífica propuesta por los jurados. " +
                 "Distinción propuesta: %s → Distinción final: %s (sin mención especial). " +
                 "Razón del rechazo: %s",
-                proposedDistinction.name(),
-                rejectedDistinction.name(),
+                translateAcademicDistinction(proposedDistinction),
+                translateAcademicDistinction(rejectedDistinction),
                 reason
         );
 
@@ -7713,6 +7748,27 @@ public class ModalityService {
             case AGREED_REJECTED, TIEBREAKER_REJECTED -> "Reprobada";
             case REJECTED_BY_COMMITTEE -> "Rechazada por el comité";
             default -> distinction.name();
+        };
+    }
+
+    private String translateAcademicDistinction(AcademicDistinction distinction) {
+        if (distinction == null) return "Sin distinción";
+        return switch (distinction) {
+            case NO_DISTINCTION -> "Sin distinción";
+            case AGREED_APPROVED -> "Aprobado por consenso";
+            case AGREED_MERITORIOUS -> "Mención Meritoria";
+            case AGREED_LAUREATE -> "Mención Laureada";
+            case AGREED_REJECTED -> "Reprobado por consenso";
+            case DISAGREEMENT_PENDING_TIEBREAKER -> "Desacuerdo – Pendiente de desempate";
+            case TIEBREAKER_APPROVED -> "Aprobado por desempate";
+            case TIEBREAKER_MERITORIOUS -> "Mención Meritoria (desempate)";
+            case TIEBREAKER_LAUREATE -> "Mención Laureada (desempate)";
+            case TIEBREAKER_REJECTED -> "Reprobado por desempate";
+            case REJECTED_BY_COMMITTEE -> "Rechazado por el comité";
+            case PENDING_COMMITTEE_MERITORIOUS -> "Mención Meritoria propuesta (pendiente del comité)";
+            case PENDING_COMMITTEE_LAUREATE -> "Mención Laureada propuesta (pendiente del comité)";
+            case TIEBREAKER_PENDING_COMMITTEE_MERITORIOUS -> "Mención Meritoria por desempate (pendiente del comité)";
+            case TIEBREAKER_PENDING_COMMITTEE_LAUREATE -> "Mención Laureada por desempate (pendiente del comité)";
         };
     }
 

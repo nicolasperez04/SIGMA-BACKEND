@@ -33,6 +33,11 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -45,15 +50,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+@Tag(name = "Modalidades", description = "Gestión completa de modalidades de grado: creación, documentos, sustentación, cancelaciones y evaluaciones")
 @RestController
 @RequestMapping("/modalities")
 @RequiredArgsConstructor
 @Slf4j
+@SecurityRequirement(name = "bearer-jwt")
 public class ModalityController {
 
     private final ModalityService modalityService;
     private final DocumentService documentService;
 
+    @Operation(summary = "Crear modalidad de grado", description = "Crea una nueva modalidad de grado en el sistema. El administrador define el tipo, requisitos y configuración específica de la modalidad.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Modalidad creada exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos: falta información requerida"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado: necesita PERM_CREATE_MODALITY o PERM_UPDATE_MODALITY"),
+            @ApiResponse(responseCode = "500", description = "Error interno del servidor al crear la modalidad")
+    })
     @PostMapping("/create")
     @PreAuthorize("hasAuthority('PERM_CREATE_MODALITY') or hasAuthority('PERM_UPDATE_MODALITY')")
     public ResponseEntity<?> createModality(@RequestBody ModalityDTO request) {
@@ -79,12 +93,25 @@ public class ModalityController {
 
     }
 
+    @Operation(summary = "Actualizar configuración de modalidad", description = "Modifica los parámetros de una modalidad existente: requisitos, plazos, condiciones de aprobación, etc.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Modalidad actualizada exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Datos inválidos"),
+            @ApiResponse(responseCode = "404", description = "Modalidad no encontrada"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado")
+    })
     @PutMapping("/update/{modalityId}")
     @PreAuthorize("hasAuthority('PERM_CREATE_MODALITY') or hasAuthority('PERM_UPDATE_MODALITY')")
     public ResponseEntity<?> updateModality(@PathVariable Long modalityId, @RequestBody ModalityDTO request) {
         return modalityService.updateModality(modalityId, request);
     }
 
+    @Operation(summary = "Desactivar modalidad", description = "Desactiva una modalidad de grado (eliminación lógica). La modalidad no aparecerá en nuevas inscripciones pero se mantiene para consulta histórica.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Modalidad desactivada exitosamente"),
+            @ApiResponse(responseCode = "404", description = "Modalidad no encontrada"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado: necesita PERM_DESACTIVE_MODALITY")
+    })
     @PutMapping("delete/{modalityId}")
     @PreAuthorize("hasAuthority('PERM_DESACTIVE_MODALITY')")
     public ResponseEntity<?> deactivateModality(@PathVariable Long modalityId) {
@@ -92,6 +119,13 @@ public class ModalityController {
     }
 
 
+    @Operation(summary = "Crear requisitos de modalidad", description = "Define los requisitos documentales obligatorios que los estudiantes deben cumplir para completar esta modalidad de grado.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Requisitos creados correctamente"),
+            @ApiResponse(responseCode = "400", description = "Lista de requisitos inválida"),
+            @ApiResponse(responseCode = "404", description = "Modalidad no encontrada"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado")
+    })
     @PostMapping("/requirements/create/{modalityId}")
     @PreAuthorize("hasAuthority('PERM_CREATE_MODALITY') or hasAuthority('PERM_UPDATE_MODALITY')")
     public ResponseEntity<?> createModalityRequirements(@PathVariable Long modalityId, @RequestBody List<RequirementDTO> requirements) {
@@ -99,6 +133,13 @@ public class ModalityController {
         return ResponseEntity.ok("Requisitos creados correctamente");
     }
 
+    @Operation(summary = "Actualizar requisito de modalidad", description = "Modifica un requisito específico: nombre, descripción, tipo de documento, plazo de entrega, etc.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Requisito actualizado correctamente"),
+            @ApiResponse(responseCode = "400", description = "Datos del requisito inválidos"),
+            @ApiResponse(responseCode = "404", description = "Requisito o modalidad no encontrados"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado")
+    })
     @PutMapping("/requirements/{modalityId}/update/{requirementId}")
     @PreAuthorize("hasAuthority('PERM_CREATE_MODALITY') or hasAuthority('PERM_UPDATE_MODALITY')")
     public ResponseEntity<?> updateRequirement(@PathVariable Long modalityId, @PathVariable Long requirementId, @RequestBody RequirementDTO request) {
@@ -107,11 +148,19 @@ public class ModalityController {
     }
 
 
+    @Operation(summary = "Obtener requisitos de modalidad", description = "Retorna la lista de requisitos documentales definidos para una modalidad, con opción de filtrar por estado (activo/inactivo).")
+    @ApiResponse(responseCode = "200", description = "Lista de requisitos obtenida")
     @GetMapping("/{modalityId}/requirements")
     public ResponseEntity<List<RequirementDTO>> listRequirements(@PathVariable Long modalityId, @RequestParam(required = false) Boolean active) {
         return modalityService.getModalityRequirements(modalityId, active);
     }
 
+    @Operation(summary = "Eliminar requisito de modalidad", description = "Desactiva un requisito documental de la modalidad (eliminación lógica). No afecta documentos ya entregados.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Requisito eliminado correctamente"),
+            @ApiResponse(responseCode = "404", description = "Requisito no encontrado"),
+            @ApiResponse(responseCode = "403", description = "Permiso denegado: necesita PERM_DELETE_MODALITY_REQUIREMENT")
+    })
     @PutMapping("/requirements/delete/{requirementId}")
     @PreAuthorize("hasAuthority('PERM_DELETE_MODALITY_REQUIREMENT')")
     public ResponseEntity<?> desactiveRequirements(@PathVariable Long requirementId) {
@@ -119,16 +168,30 @@ public class ModalityController {
     }
 
 
+    @Operation(summary = "Obtener todas las modalidades", description = "Retorna una lista completa de todas las modalidades de grado disponibles en el sistema, incluyendo activas e inactivas.")
+    @ApiResponse(responseCode = "200", description = "Lista completa de modalidades obtenida")
     @GetMapping
     public ResponseEntity<?> getAllModalities() {
         return modalityService.getAllModalities();
     }
 
+    @Operation(summary = "Obtener detalle de modalidad", description = "Retorna la información completa de una modalidad específica: configuración, requisitos, estudiantes inscritos, estado actual.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Detalle de modalidad obtenido"),
+            @ApiResponse(responseCode = "404", description = "Modalidad no encontrada")
+    })
     @GetMapping("/{id}")
     public ResponseEntity<?> getModalityById(@PathVariable Long id) {
         return modalityService.getModalityDetail(id);
     }
 
+    @Operation(summary = "Cargar documento requerido", description = "Permite al estudiante o director cargar un documento obligatorio para la modalidad de grado. Valida tipo de archivo, tamaño y formato.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Documento cargado exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Archivo inválido: formato no soportado o excede tamaño máximo"),
+            @ApiResponse(responseCode = "404", description = "Modalidad o documento requerido no encontrado"),
+            @ApiResponse(responseCode = "413", description = "Archivo demasiado grande (máximo 20MB)")
+    })
     @PostMapping(
             value = "/{studentModalityId}/documents/{requiredDocumentId}",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
@@ -144,6 +207,8 @@ public class ModalityController {
                 requiredDocumentId,
                 file
         );
+
+
     }
 
 

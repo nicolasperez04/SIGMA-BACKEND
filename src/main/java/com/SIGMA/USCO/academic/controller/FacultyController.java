@@ -3,6 +3,12 @@ package com.SIGMA.USCO.academic.controller;
 import com.SIGMA.USCO.academic.dto.FacultyDTO;
 import com.SIGMA.USCO.academic.entity.Faculty;
 import com.SIGMA.USCO.academic.service.FacultyService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,13 +17,21 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
+@Tag(name = "Facultades", description = "Gestión de facultades: creación, actualización, consulta y desactivación")
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/faculties")
+@SecurityRequirement(name = "bearer-jwt")
 public class FacultyController {
 
     private final FacultyService facultyService;
 
+    @Operation(summary = "Crear facultad", description = "Crea una nueva facultad en el sistema")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Facultad creada exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Solicitud inválida"),
+            @ApiResponse(responseCode = "403", description = "Acceso denegado")
+    })
     @PostMapping("/create")
     @PreAuthorize("hasAuthority('PERM_CREATE_FACULTY')")
     public ResponseEntity<?> createFaculty(@RequestBody FacultyDTO request){
@@ -46,7 +60,9 @@ public class FacultyController {
 
     }
 
-    @GetMapping("/all") //admin
+    @Operation(summary = "Obtener todas las facultades", description = "Retorna la lista completa de todas las facultades del sistema")
+    @ApiResponse(responseCode = "200", description = "Lista de facultades obtenida")
+    @GetMapping("/all")
     @PreAuthorize("hasAuthority('PERM_VIEW_FACULTIES')")
     public ResponseEntity<?> getAllFaculties(){
         return ResponseEntity.ok(
@@ -57,6 +73,8 @@ public class FacultyController {
 
     }
 
+    @Operation(summary = "Obtener facultades activas", description = "Retorna solo las facultades que están activas en el sistema")
+    @ApiResponse(responseCode = "200", description = "Lista de facultades activas obtenida")
     @GetMapping("/active")
     public ResponseEntity<?> getActiveFaculties() {
         return ResponseEntity.ok(
@@ -66,9 +84,16 @@ public class FacultyController {
         );
     }
 
+    @Operation(summary = "Actualizar facultad", description = "Actualiza la información de una facultad existente")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Facultad actualizada exitosamente"),
+            @ApiResponse(responseCode = "400", description = "Solicitud inválida"),
+            @ApiResponse(responseCode = "404", description = "Facultad no encontrada"),
+            @ApiResponse(responseCode = "403", description = "Acceso denegado")
+    })
     @PutMapping("/update/{id}")
     @PreAuthorize("hasAuthority('PERM_UPDATE_FACULTY')")
-    public ResponseEntity<?> updateFaculty(@PathVariable Long id, @RequestBody FacultyDTO request) {
+    public ResponseEntity<?> updateFaculty(@Parameter(description = "ID de la facultad") @PathVariable Long id, @RequestBody FacultyDTO request) {
         try {
             FacultyDTO updatedFaculty = facultyService.updateFaculty(id, request);
             return ResponseEntity.ok(
@@ -98,9 +123,15 @@ public class FacultyController {
         }
     }
 
+    @Operation(summary = "Desactivar facultad", description = "Desactiva una facultad específica del sistema")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Facultad desactivada exitosamente"),
+            @ApiResponse(responseCode = "404", description = "Facultad no encontrada"),
+            @ApiResponse(responseCode = "403", description = "Acceso denegado")
+    })
     @PutMapping("/desactive/{id}")
     @PreAuthorize("hasAuthority('PERM_DELETE_FACULTY')")
-    public ResponseEntity<?> desactivate(@PathVariable Long id) {
+    public ResponseEntity<?> desactivate(@Parameter(description = "ID de la facultad") @PathVariable Long id) {
         facultyService.deactivateFaculty(id);
         return ResponseEntity.ok(
                 Map.of(
@@ -109,9 +140,15 @@ public class FacultyController {
         );
     }
 
-    @GetMapping("/detail/{id}") //admin
+    @Operation(summary = "Obtener detalle de facultad", description = "Retorna la información detallada de una facultad incluyendo sus programas académicos")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Detalle de facultad obtenido"),
+            @ApiResponse(responseCode = "404", description = "Facultad no encontrada"),
+            @ApiResponse(responseCode = "403", description = "Acceso denegado")
+    })
+    @GetMapping("/detail/{id}")
     @PreAuthorize("hasAuthority('PERM_VIEW_FACULTIES')")
-    public ResponseEntity<?> getFacultyDetail(@PathVariable Long id) {
+    public ResponseEntity<?> getFacultyDetail(@Parameter(description = "ID de la facultad") @PathVariable Long id) {
         return ResponseEntity.ok(facultyService.getFacultyDetail(id));
     }
 

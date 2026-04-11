@@ -4,6 +4,12 @@ import com.SIGMA.USCO.Modalities.Entity.AcademicCertificate;
 import com.SIGMA.USCO.Modalities.Entity.StudentModality;
 import com.SIGMA.USCO.Modalities.Repository.StudentModalityRepository;
 import com.SIGMA.USCO.notifications.service.AcademicCertificatePdfService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
@@ -18,21 +24,30 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Path;
 
+@Tag(name = "Certificados Académicos", description = "Generación y descarga de certificados de aprobación de modalidades de grado")
 @RestController
 @RequestMapping("/certificate")
 @RequiredArgsConstructor
+@SecurityRequirement(name = "bearer-jwt")
 public class AcademicCertificateTestController {
 
     private final AcademicCertificatePdfService certificatePdfService;
     private final StudentModalityRepository studentModalityRepository;
 
-    /**
-     * Genera y retorna el acta de aprobación correspondiente según el tipo de modalidad:
-     * - Completa (con sustentación, jurados y/o director) → generateCertificate
-     * - Simplificada (aprobada directamente por Comité, sin sustentación ni jurados) → generateCertificateForCommitteeApproval
-     */
+    @Operation(
+            summary = "Generar certificado académico",
+            description = "Genera y retorna el acta de aprobación correspondiente según el tipo de modalidad:\n" +
+                    "- Completa (con sustentación, jurados y/o director) → Acta de sustentación\n" +
+                    "- Simplificada (aprobada directamente por Comité, sin sustentación ni jurados) → Acta de aprobación simplificada"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Certificado generado y descargado exitosamente"),
+            @ApiResponse(responseCode = "404", description = "Modalidad no encontrada"),
+            @ApiResponse(responseCode = "500", description = "Error al generar el certificado")
+    })
     @GetMapping("/{studentModalityId}")
-    public ResponseEntity<InputStreamResource> generateTestCertificate(@PathVariable Long studentModalityId) throws IOException {
+    public ResponseEntity<InputStreamResource> generateTestCertificate(
+            @Parameter(description = "ID de la modalidad del estudiante") @PathVariable Long studentModalityId) throws IOException {
         StudentModality modality = studentModalityRepository.findById(studentModalityId)
                 .orElseThrow(() -> new RuntimeException("Modalidad no encontrada"));
 
