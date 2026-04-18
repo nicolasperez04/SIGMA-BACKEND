@@ -16,8 +16,10 @@ import com.SIGMA.USCO.notifications.event.*;
 import com.SIGMA.USCO.notifications.repository.NotificationRepository;
 import com.SIGMA.USCO.notifications.service.NotificationDispatcherService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -35,6 +37,7 @@ public class ProgramHeadNotificationListener {
     private final StudentDocumentRepository studentDocumentRepository;
 
     @EventListener
+    @Transactional
     public void handleModalityStartedEvent(StudentModalityStarted event){
         StudentModality studentModality = studentModalityRepository.findById(event.getStudentModalityId()).orElseThrow();
         List<User> programHeads = userRepository.findAllByRoles_Name("PROGRAM_HEAD");
@@ -289,6 +292,7 @@ public class ProgramHeadNotificationListener {
     }
 
     @EventListener
+    @Transactional
     public void FinalDefenseResult(FinalDefenseResultEvent event){
         StudentModality modality = studentModalityRepository.findById(event.getStudentModalityId()).orElseThrow();
         User director = modality.getProjectDirector();

@@ -23,12 +23,19 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 import com.SIGMA.USCO.Modalities.Entity.StudentModalityMember;
 import com.SIGMA.USCO.Modalities.Entity.enums.MemberStatus;
 import com.SIGMA.USCO.Modalities.Repository.StudentModalityMemberRepository;
+import com.SIGMA.USCO.notifications.event.FinalDefenseResultEvent;
+import com.SIGMA.USCO.notifications.service.ExaminerCertificatePdfService;
+import com.SIGMA.USCO.Modalities.Entity.ExaminerCertificate;
+import com.SIGMA.USCO.Modalities.Entity.enums.CertificateStatus;
+import com.SIGMA.USCO.Modalities.Repository.ExaminerCertificateRepository;
+import java.nio.file.Path;
 
 @Component
 @RequiredArgsConstructor
@@ -41,6 +48,8 @@ public class ExaminerNotificationListener {
     private final UserRepository userRepository;
     private final StudentModalityRepository studentModalityRepository;
     private final StudentModalityMemberRepository studentModalityMemberRepository;
+    private final ExaminerCertificatePdfService examinerCertificatePdfService;
+    private final ExaminerCertificateRepository examinerCertificateRepository;
 
     @Async("notificationTaskExecutor")
     public void notifyExaminersAssignment(Long studentModalityId) {
@@ -663,4 +672,178 @@ public class ExaminerNotificationListener {
             dispatcher.dispatch(notification);
         }
     }
+
+    /**
+     * Genera y envía actas de participación a todos los jurados
+     * cuando la sustentación es aprobada y completada.
+     */
+    @EventListener
+    @Transactional
+    public void onFinalDefenseApproved(FinalDefenseResultEvent event) {
+        Long modalityId = event.getStudentModalityId();
+        StudentModality modality = studentModalityRepository.findById(modalityId)
+                .orElseThrow(() -> new RuntimeException("Modalidad no encontrada"));
+        
+        // Solo procesar si fue aprobada
+        if (event.getFinalStatus() == null || 
+            !event.getFinalStatus().name().contains("APPROVED")) {
+            log.debug("Evento de defensa no es aprobatorio, se omite generación de actas para jurados");
+            return;
+        }
+
+        log.info("Generando actas de participación para jurados de modalidad ID: {}", modalityId);
+
+        // Obtener todos los jurados asignados
+        List<DefenseExaminer> examiners = modality.getDefenseExaminers();
+        if (examiners == null || examiners.isEmpty()) {
+            log.warn("No hay jurados asignados para la modalidad ID: {}", modalityId);
+            return;
+        }
+
+        // Generar y enviar acta a cada jurado
+        for (DefenseExaminer examiner : examiners) {
+            try {
+                log.info("Generando acta para jurado {} en modalidad ID: {}", 
+                    examiner.getExaminer().getId(), modalityId);
+
+                // Generar el PDF del acta
+                ExaminerCertificate certificate = examinerCertificatePdfService.generateExaminerCertificate(
+                    modality, examiner
+                );
+                
+                Path pdfPath = examinerCertificatePdfService.getCertificatePath(
+                    modalityId, 
+                    examiner.getExaminer().getId()
+                );
+
+                // Crear notificación para el jurado
+                User examinerUser = examiner.getExaminer();
+                String subject = "Acta de Participación – Modalidad de Grado Completada";
+                
+                String message = buildExaminerParticipationMessage(examinerUser, modality, examiner);
+                
+                Notification notification = Notification.builder()
+                        .type(NotificationType.DEFENSE_COMPLETED)
+                        .recipientType(NotificationRecipientType.EXAMINER)
+                        .recipient(examinerUser)
+                        .triggeredBy(null)
+                        .studentModality(modality)
+                        .subject(subject)
+                        .message(message)
+                        .createdAt(LocalDateTime.now())
+                        .build();
+
+                notificationRepository.save(notification);
+
+                // Enviar notificación con el acta adjunta
+                try {
+                    dispatcher.dispatchWithAttachment(
+                        notification,
+                        pdfPath,
+                        "ACTA_JURADO_" + certificate.getCertificateNumber() + ".pdf"
+                    );
+                    
+                    // Actualizar estado del certificado
+                    examinerCertificatePdfService.updateCertificateStatus(
+                        certificate.getId(), 
+                        CertificateStatus.SENT
+                    );
+                    
+                    log.info("Acta enviada al jurado {} (modalidad ID {})", 
+                        examinerUser.getId(), modalityId);
+                } catch (Exception e) {
+                    log.error("Error enviando acta al jurado {}: {}", 
+                        examinerUser.getId(), e.getMessage());
+                    // Intentar enviar sin adjunto como fallback
+                    dispatcher.dispatch(notification);
+                }
+
+            } catch (Exception e) {
+                log.error("Error generando acta para jurado {} en modalidad ID {}: {}", 
+                    examiner.getExaminer().getId(), modalityId, e.getMessage(), e);
+            }
+        }
+
+        log.info("Proceso de generación de actas para jurados completado para modalidad ID: {}", 
+            modalityId);
+    }
+
+    /**
+     * Construye el mensaje para el jurado sobre su participación
+     */
+    private String buildExaminerParticipationMessage(User examiner, StudentModality modality, DefenseExaminer defenseExaminer) {
+        String examinerRole = switch (defenseExaminer.getExaminerType()) {
+            case PRIMARY_EXAMINER_1, PRIMARY_EXAMINER_2 -> "Jurado Principal";
+            case TIEBREAKER_EXAMINER -> "Jurado de Desempate";
+        };
+        
+        List<StudentModalityMember> members = studentModalityMemberRepository
+                .findByStudentModalityIdAndStatus(modality.getId(), MemberStatus.ACTIVE);
+        String studentNames;
+        if (!members.isEmpty()) {
+            studentNames = members.stream()
+                    .map(m -> m.getStudent().getName() + " " + m.getStudent().getLastName())
+                    .collect(Collectors.joining(", "));
+        } else {
+            studentNames = modality.getLeader() != null 
+                    ? modality.getLeader().getName() + " " + modality.getLeader().getLastName()
+                    : "No registrado";
+        }
+        
+        return """
+            Estimado(a) %s,
+            
+            Reciba un cordial saludo de la Universidad Surcolombiana.
+            
+            Le informamos que la sustentación de la modalidad de grado en la cual usted participó como %s 
+            ha sido completada exitosamente.
+            
+            ───────────────────────────────
+            INFORMACIÓN DEL PROCESO
+            ───────────────────────────────
+            • Modalidad: %s
+            • Programa académico: %s
+            • Facultad: %s
+            • Resultado: APROBADA
+            • Estudiante(s): %s
+            
+            ───────────────────────────────
+            SU PARTICIPACIÓN
+            ───────────────────────────────
+            Usted participó activamente en todas las etapas de evaluación como %s, incluyendo:
+            
+            ✓ Revisión de documentación de propuesta
+            ✓ Revisión de documentos finales
+            ✓ Asistencia a la sustentación oral
+            ✓ Registro de evaluación académica
+            
+            ───────────────────────────────
+            ACTA DE PARTICIPACIÓN
+            ───────────────────────────────
+            Se adjunta a este correo el ACTA DE PARTICIPACIÓN oficial, que certifica su rol y 
+            contribución en el proceso de evaluación. Este documento constituye una evidencia formal 
+            de cumplimiento de funciones académicas y puede ser utilizado para certificaciones o 
+            como soporte en su hoja de vida profesional.
+            
+            El acta forma parte del registro institucional de trazabilidad y aseguramiento de calidad 
+            de nuestros programas académicos.
+            
+            Agradecemos su dedicación y excelente desempeño en el aseguramiento de la calidad académica 
+            de nuestros programas.
+            
+            Cordialmente,
+            
+            Sistema de Gestión Académica — SIGMA
+            Universidad Surcolombiana
+            """.formatted(
+                examiner.getName(),
+                examinerRole,
+                modality.getProgramDegreeModality().getDegreeModality().getName(),
+                modality.getProgramDegreeModality().getAcademicProgram().getName(),
+                modality.getProgramDegreeModality().getAcademicProgram().getFaculty().getName(),
+                studentNames,
+                examinerRole
+            );
+    }
+
 }
